@@ -1,0 +1,17 @@
+# secrets — 절대 커밋 금지
+.env
+*.key
+secrets/
+
+# data
+data/
+*.parquet
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/

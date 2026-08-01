@@ -1,0 +1,57 @@
+# P0 수집기 설정. 수수료·출금비는 추정 초기값 — PLAN.md 실측 확인 항목과 함께 검증 후 갱신할 것.
+
+coins: [BTC, ETH, XRP, SOL, TRX, DOGE, ADA]
+
+domestic: [upbit, bithumb]
+overseas: [binance, bybit, okx]
+overseas_ref: binance        # 김프 계산의 해외 기준 거래소 (P0), best-of 확장은 추후
+
+ladder_usd: [5000, 20000, 50000]   # 왕복 엣지를 계산할 명목 금액 사다리 (USD)
+
+staleness:
+  book_ms: 5000              # 이보다 오래된 호가는 김프 계산에서 제외
+  fx_ms: 120000
+
+engine:
+  min_interval_ms: 200       # 코인당 김프 재계산 최소 간격 (탐지 <100ms 요건은 WS 푸시가 담당,
+                             # 계산 스로틀은 CPU 보호용)
+
+# taker 수수료 추정 초기값. 등급·쿠폰에 따라 다름 → 실계정 값으로 교체 필수 (VERIFY)
+fees:
+  taker:
+    upbit: 0.0005
+    bithumb: 0.0025          # 쿠폰 적용 시 0.0004까지 내려감 — 실계정 값 확인
+    binance: 0.001
+    bybit: 0.001
+    okx: 0.001
+
+# 출금 수수료 플랫 추정 (USD 환산). 네트워크·거래소별 상이 → VERIFY 후 갱신
+withdraw_fee_usd_est:
+  default: 2.0
+  USDT: 1.0                  # TRC20/SOL 기준 추정
+  BTC: 15.0
+  ETH: 3.0
+  XRP: 0.2
+  SOL: 0.05
+  TRX: 1.0
+  DOGE: 4.0
+  ADA: 0.5
+
+alerts:
+  net_edge_threshold: 0.005  # 순엣지 0.5% 이상이면 알림
+  cooldown_sec: 300          # (코인, 방향)별 쿨다운
+  health_cooldown_sec: 600
+
+storage:
+  root: data
+  flush_rows: 5000
+  flush_sec: 30
+  book_snapshot_interval_ms: 1000   # 호가 스냅샷 저장 스로틀 (계산은 전 틱, 저장은 1초)
+
+fx:
+  poll_sec: 5
+  # NOTE: 던어무 비공식 엔드포인트 (업비트 자체 UI가 쓰는 소스). T8에서 정식 소스 결정 전 임시.
+  url: "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD"
+
+telegram:
+  enabled: true              # 토큰/챗ID는 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
