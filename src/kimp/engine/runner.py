@@ -16,10 +16,12 @@ from .premium import exec_premium, inbound_gross_edge, outbound_gross_edge, theo
 
 
 class PremiumEngine:
-    def __init__(self, bus: Bus, store: BookStore, cfg: Config) -> None:
+    def __init__(self, bus: Bus, store: BookStore, cfg: Config, coins: list[str] | None = None) -> None:
         self.bus = bus
         self.store = store
         self.cfg = cfg
+        self.coins = list(coins) if coins is not None else cfg.coins
+        self._coin_set = set(self.coins)
         self.fx_rate: Decimal | None = None
         self.fx_ts: int = 0
         self._last_calc: dict[str, float] = {}
@@ -30,9 +32,9 @@ class PremiumEngine:
 
     def on_book(self, book: Book) -> None:
         # KRW-USDT 마켓 갱신은 전 코인에 영향을 주지만, 코인별 스로틀이 폭주를 막는다
-        coins = self.cfg.coins if book.base == "USDT" else [book.base]
+        coins = self.coins if book.base == "USDT" else [book.base]
         for coin in coins:
-            if coin not in self.cfg.coins:
+            if coin not in self._coin_set:
                 continue
             if self._throttled(coin):
                 continue

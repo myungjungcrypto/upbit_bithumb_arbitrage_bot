@@ -112,3 +112,13 @@ def fx_row(f) -> dict:
 
 def health_row(h) -> dict:
     return {"ts_local": h.ts_local, "component": h.component, "status": h.status, "detail": h.detail}
+
+
+def wallet_row(w) -> dict:
+    return {
+        "ts_local": w.ts_local,
+        "exchange": w.exchange,
+        "coin": w.coin,
+        "deposit_ok": w.deposit_ok,
+        "withdraw_ok": w.withdraw_ok,
+    }

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import aiohttp
@@ -29,9 +30,11 @@ class OkxCollector(WSCollector):
         return "ping"
 
     async def subscribe(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        await ws.send_json(
-            {"op": "subscribe", "args": [{"channel": "books5", "instId": i} for i in self.insts]}
-        )
+        args = [{"channel": "books5", "instId": i} for i in self.insts]
+        for i in range(0, len(args), 100):
+            await ws.send_json({"op": "subscribe", "args": args[i : i + 100]})
+            if i + 100 < len(args):
+                await asyncio.sleep(0.2)
 
     async def handle(self, raw: str | bytes) -> None:
         if raw == "pong":

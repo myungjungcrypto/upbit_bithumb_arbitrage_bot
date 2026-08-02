@@ -65,6 +65,15 @@ class Fx:
 @dataclass(slots=True)
 class Health:
     component: str
-    status: str      # "up" | "down" | "stale" | "error"
+    status: str      # "up" | "down" | "stale" | "error" | "new_listing"
     detail: str
+    ts_local: int
+
+
+@dataclass(slots=True)
+class WalletStatus:
+    exchange: str
+    coin: str
+    deposit_ok: bool
+    withdraw_ok: bool
     ts_local: int

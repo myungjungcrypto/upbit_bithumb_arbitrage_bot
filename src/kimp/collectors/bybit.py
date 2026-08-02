@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from decimal import Decimal
 
@@ -35,9 +36,11 @@ class BybitCollector(WSCollector):
 
     async def subscribe(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         self._books = {}  # 재연결마다 스냅샷부터 다시 시작
-        await ws.send_json(
-            {"op": "subscribe", "args": [f"orderbook.50.{s}" for s in self.symbols]}
-        )
+        args = [f"orderbook.50.{s}" for s in self.symbols]
+        for i in range(0, len(args), 10):  # v5는 구독 메시지당 args 수 제한
+            await ws.send_json({"op": "subscribe", "args": args[i : i + 10]})
+            if i + 10 < len(args):
+                await asyncio.sleep(0.2)
 
     async def handle(self, raw: str | bytes) -> None:
         d = json.loads(raw)

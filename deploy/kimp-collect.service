@@ -1,0 +1,29 @@
+# systemd 유닛 — /etc/systemd/system/kimp-collect.service 로 복사
+#
+# 설치 (t3.large, 타 워크로드 공유 전제 — Nice로 우선순위 양보):
+#   sudo useradd -r -m -d /opt/kimp kimp
+#   sudo -u kimp git clone <repo> /opt/kimp/app
+#   cd /opt/kimp/app && sudo -u kimp python3.11 -m venv /opt/kimp/venv
+#   sudo -u kimp /opt/kimp/venv/bin/pip install -e /opt/kimp/app
+#   sudo -u kimp cp /opt/kimp/app/.env.example /opt/kimp/env   # 텔레그램 토큰 기입
+#   sudo cp /opt/kimp/app/deploy/kimp-collect.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kimp-collect
+#   journalctl -u kimp-collect -f
+[Unit]
+Description=kimp P0 market data collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kimp
+WorkingDirectory=/opt/kimp/app
+EnvironmentFile=-/opt/kimp/env
+ExecStart=/opt/kimp/venv/bin/kimp-collect --config /opt/kimp/app/config/default.yaml
+Restart=always
+RestartSec=5
+Nice=5
+# 데이터는 WorkingDirectory 기준 data/ 에 쌓임 (config storage.root로 변경 가능)
+
+[Install]
+WantedBy=multi-user.target
