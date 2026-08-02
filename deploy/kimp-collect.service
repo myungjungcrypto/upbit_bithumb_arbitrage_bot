@@ -9,6 +9,9 @@
 #   sudo cp /opt/kimp/app/deploy/kimp-collect.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now kimp-collect
 #   journalctl -u kimp-collect -f
+#
+# 코드 업데이트 (/opt/kimp는 kimp 홈이라 700 — cd 대신 -C 사용):
+#   sudo -u kimp git -C /opt/kimp/app pull && sudo systemctl restart kimp-collect
 [Unit]
 Description=kimp P0 market data collector
 After=network-online.target
