@@ -68,6 +68,14 @@ class Config:
         return self.raw.get("fx", {})
 
     @property
+    def upbit_access_key(self) -> str:
+        return os.environ.get("UPBIT_ACCESS_KEY", "")
+
+    @property
+    def upbit_secret_key(self) -> str:
+        return os.environ.get("UPBIT_SECRET_KEY", "")
+
+    @property
     def telegram_token(self) -> str:
         return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 

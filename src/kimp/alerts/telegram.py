@@ -58,7 +58,9 @@ class Alerter:
         """key별 쿨다운 → INFO는 예산 검사 → 전송 큐. 핫패스에서 호출해도 안전 (논블로킹)."""
         now = time.monotonic()
         cd = self.cooldown_sec if cooldown is None else cooldown
-        if now - self._last_sent.get(key, 0.0) < cd:
+        # 주의: 기본값 0.0 비교는 부팅 직후(uptime < cooldown) 모든 알림을 삼키는 버그가 됨 — None sentinel 필수
+        last = self._last_sent.get(key)
+        if last is not None and now - last < cd:
             return
         self._last_sent[key] = now
         msg = f"{_EMOJI.get(severity, '')} [{severity}] {text}"

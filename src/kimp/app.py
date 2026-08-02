@@ -14,6 +14,7 @@ from .collectors.fx import FxCollector
 from .collectors.okx import OkxCollector
 from .collectors.upbit import UpbitCollector
 from .collectors.wallet_bithumb import BithumbWalletStatusCollector
+from .collectors.wallet_upbit import UpbitWalletStatusCollector
 from .config import Config
 from .engine.books import BookStore
 from .engine.runner import PremiumEngine
@@ -244,14 +245,28 @@ async def run(cfg: Config) -> None:
             continue
         collectors.append(cls(bus, per_exchange_coins.get(name, cfg.coins)))
     fx = FxCollector(bus, cfg.fx.get("url", ""), float(cfg.fx.get("poll_sec", 5)))
-    wallet = BithumbWalletStatusCollector(
-        bus, float(cfg.raw.get("wallet_status", {}).get("bithumb_poll_sec", 60))
-    )
+    wcfg = cfg.raw.get("wallet_status", {})
+    wallet_collectors = [
+        BithumbWalletStatusCollector(bus, float(wcfg.get("bithumb_poll_sec", 60)))
+    ]
+    if cfg.upbit_access_key and cfg.upbit_secret_key:
+        wallet_collectors.append(
+            UpbitWalletStatusCollector(
+                bus, cfg.upbit_access_key, cfg.upbit_secret_key,
+                float(wcfg.get("upbit_poll_sec", 60)),
+            )
+        )
+        log.info("upbit wallet status: ON (조회 전용 키 감지)")
+    else:
+        log.info("upbit wallet status: OFF (UPBIT_ACCESS_KEY/SECRET_KEY 미설정 — 함정 판정은 빗썸만)")
 
     tasks = [
         *(asyncio.create_task(c.run(stop), name=f"collector.{c.name}") for c in collectors),
         asyncio.create_task(fx.run(stop), name="collector.fx"),
-        asyncio.create_task(wallet.run(stop), name="collector.wallet.bithumb"),
+        *(
+            asyncio.create_task(w.run(stop), name=f"collector.wallet.{w.exchange}")
+            for w in wallet_collectors
+        ),
         asyncio.create_task(listing_watcher(bus, cfg, set(uni["upbit"]), stop), name="universe.watcher"),
         asyncio.create_task(consume_books(), name="consume.books"),
         asyncio.create_task(consume_trades(), name="consume.trades"),
