@@ -77,3 +77,4 @@ class WalletStatus:
     deposit_ok: bool
     withdraw_ok: bool
     ts_local: int
+    initial: bool = False  # 기동 후 첫 스냅샷 (변화가 아님 — 알림 억제용)

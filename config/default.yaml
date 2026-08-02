@@ -52,6 +52,7 @@ alerts:
   net_edge_threshold: 0.005  # 순엣지 0.5% 이상이면 알림
   cooldown_sec: 300          # (코인, 방향)별 쿨다운
   health_cooldown_sec: 600
+  max_immediate_per_min: 6   # INFO 즉시 전송 분당 예산 — 초과분은 60초 다이제스트로 묶음
 
 storage:
   root: data

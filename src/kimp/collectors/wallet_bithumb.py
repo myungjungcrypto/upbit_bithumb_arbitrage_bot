@@ -47,6 +47,26 @@ class BithumbWalletStatusCollector:
         self.poll_sec = poll_sec
         self._state: dict[str, tuple[bool, bool]] = {}
 
+    def _process(self, parsed: list[tuple[str, bool, bool]], ts: int) -> tuple[list[WalletStatus], list[str]]:
+        """diff → 이벤트 목록 + (첫 스냅샷일 때만) 정지 코인 요약. 순수 로직 (테스트 대상).
+
+        첫 폴링은 '변화'가 아니라 초기 상태이므로 initial=True로 표시해 개별 알림을 억제하고,
+        그 시점에 이미 정지 중인 코인만 요약 1건으로 보고한다."""
+        initial = not self._state
+        events: list[WalletStatus] = []
+        suspended: list[str] = []
+        for coin, dep, wd in parsed:
+            if self._state.get(coin) == (dep, wd):
+                continue
+            self._state[coin] = (dep, wd)
+            events.append(WalletStatus("bithumb", coin, dep, wd, ts, initial))
+            if initial and not (dep and wd):
+                parts = [] if dep else ["입금"]
+                if not wd:
+                    parts.append("출금")
+                suspended.append(f"{coin}({'·'.join(parts)} 정지)")
+        return events, suspended
+
     async def run(self, stop: asyncio.Event) -> None:
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
         fail_streak = 0
@@ -56,13 +76,21 @@ class BithumbWalletStatusCollector:
                     async with sess.get(URL, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                         resp.raise_for_status()
                         data = await resp.json(content_type=None)
-                    ts = now_ms()
-                    for coin, dep, wd in parse_assetsstatus(data):
-                        prev = self._state.get(coin)
-                        if prev == (dep, wd):
-                            continue  # 변화만 발행
-                        self._state[coin] = (dep, wd)
-                        self.bus.publish("wallet", WalletStatus("bithumb", coin, dep, wd, ts))
+                    events, suspended = self._process(parse_assetsstatus(data), now_ms())
+                    for ev in events:
+                        self.bus.publish("wallet", ev)
+                    if suspended:
+                        head = suspended[:20]
+                        more = f" 외 {len(suspended)-20}종" if len(suspended) > 20 else ""
+                        self.bus.publish(
+                            "health",
+                            Health(
+                                f"collector.{self.name}",
+                                "wallet_snapshot",
+                                f"빗썸 입출금 정지 중 {len(suspended)}종: {', '.join(head)}{more}",
+                                now_ms(),
+                            ),
+                        )
                     fail_streak = 0
                 except asyncio.CancelledError:
                     raise

@@ -41,8 +41,16 @@ class UpbitCollector(WSCollector):
         if t == "orderbook":
             base, quote = parse_dash_code(d["code"])
             units = d.get("orderbook_units") or []
-            bids = tuple(Level(D(u["bid_price"]), D(u["bid_size"])) for u in units)
-            asks = tuple(Level(D(u["ask_price"]), D(u["ask_size"])) for u in units)
+            # 방어적 정렬: VWAP 워크는 bids 내림차순·asks 오름차순을 전제 —
+            # 거래소가 정렬을 보장하지 않아도(특히 빗썸 호환 프로토콜) 깨지지 않게 한다
+            bids = tuple(
+                sorted((Level(D(u["bid_price"]), D(u["bid_size"])) for u in units),
+                       key=lambda l: l.price, reverse=True)
+            )
+            asks = tuple(
+                sorted((Level(D(u["ask_price"]), D(u["ask_size"])) for u in units),
+                       key=lambda l: l.price)
+            )
             self.bus.publish(
                 "book",
                 Book(self.name, base, quote, bids, asks, d.get("timestamp"), now_ms()),

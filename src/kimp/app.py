@@ -62,6 +62,7 @@ async def run(cfg: Config) -> None:
         cfg.telegram_token,
         cfg.telegram_chat_id,
         cooldown_sec=float(cfg.alerts.get("cooldown_sec", 300)),
+        max_immediate_per_min=int(cfg.alerts.get("max_immediate_per_min", 6)),
     )
     if cfg.telegram_enabled and alerter.live:
         log.info("telegram alerts: ON")
@@ -119,6 +120,8 @@ async def run(cfg: Config) -> None:
             writers["fx"].add(fx_row(f))
 
     edge_thr = float(cfg.alerts.get("net_edge_threshold", 0.005))
+    # 거래소별 최신 입출금 상태 캐시 — T4 게이트 ①의 판단용 (P0는 빗썸만, 업비트/해외는 P0.5)
+    wallet_state: dict[tuple[str, str], tuple[bool, bool]] = {}
 
     async def consume_premium() -> None:
         q = bus.subscribe("premium")
@@ -131,16 +134,42 @@ async def run(cfg: Config) -> None:
             for r in rows:
                 for direction in ("in", "out"):
                     net = r.get(f"{direction}_net")
-                    if net is not None and net >= edge_thr:
-                        cap = r.get(f"{direction}_capacity_usd")
-                        cap_txt = f", capacity ~${cap:,.0f}" if cap else ""
+                    if net is None or net < edge_thr:
+                        continue
+                    coin, dom_ex = r["coin"], r["dom_ex"]
+                    # T4 게이트: IN은 국내 입금 가능, OUT은 국내 출금 가능이 전제
+                    ws = wallet_state.get((dom_ex, coin))
+                    blocked = None
+                    if ws is not None:
+                        dep_ok, wd_ok = ws
+                        if direction == "in" and not dep_ok:
+                            blocked = "입금 정지"
+                        elif direction == "out" and not wd_ok:
+                            blocked = "출금 정지"
+                    cap = r.get(f"{direction}_capacity_usd")
+                    cap_txt = f", capacity ~${cap:,.0f}" if cap else ""
+                    body = (
+                        f"{coin} {direction.upper()} 순엣지 {net*100:.2f}% "
+                        f"({dom_ex}↔{r['ovs_ex']}, ${r['notional_usd']:,.0f}, "
+                        f"실행김프 {(r['exec_mid'] or 0)*100:.2f}%{cap_txt})"
+                    )
+                    if blocked:
                         alerter.alert(
-                            INFO,
-                            f"edge:{r['coin']}:{direction}:{r['dom_ex']}",
-                            f"{r['coin']} {direction.upper()} 순엣지 {net*100:.2f}% "
-                            f"({r['dom_ex']}↔{r['ovs_ex']}, ${r['notional_usd']:,.0f}, "
-                            f"실행김프 {(r['exec_mid'] or 0)*100:.2f}%{cap_txt})",
+                            WARN,
+                            f"trap:{coin}:{direction}:{dom_ex}",
+                            f"함정 — {dom_ex} {coin} {blocked} 중인데 {direction.upper()} 엣지 "
+                            f"{net*100:.1f}%. 먹을 수 없는 김프 (T4-①)",
+                            cooldown=health_cd,
                         )
+                    elif abs(net) >= 0.10:
+                        alerter.alert(
+                            WARN,
+                            f"anomaly:{coin}:{direction}:{dom_ex}",
+                            f"비정상 괴리 — {body} · 지갑 상태 미확인({dom_ex}) — 함정/데이터 이상 확인 필요",
+                            cooldown=health_cd,
+                        )
+                    else:
+                        alerter.alert(INFO, f"edge:{coin}:{direction}:{dom_ex}", body)
 
     health_cd = float(cfg.alerts.get("health_cooldown_sec", 600))
 
@@ -157,18 +186,26 @@ async def run(cfg: Config) -> None:
                               f"{h.component}: {h.status} — {h.detail}", cooldown=health_cd)
             elif h.status == "new_listing":
                 alerter.alert(WARN, f"listing:{h.detail[:40]}", h.detail, cooldown=0)
+            elif h.status == "wallet_snapshot":
+                alerter.alert(WARN, f"wallet_snapshot:{h.component}", h.detail, cooldown=health_cd)
 
     universe_set = set(uni["all"])
 
     async def consume_wallet() -> None:
-        """빗썸 입출금 상태 변화 — T4 게이트 ①. 유니버스 코인의 정지/복구는 알림."""
+        """빗썸 입출금 상태 변화 — T4 게이트 ①. 상태 캐시 갱신 + 유니버스 코인의 정지/복구 알림.
+
+        기동 첫 스냅샷(initial)은 저장·캐시만 하고 개별 알림은 억제 — 정지 중인 코인은
+        수집기가 요약 1건(health: wallet_snapshot)으로 보고한다."""
         q = bus.subscribe("wallet")
         while not stop.is_set():
             try:
                 w = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
+            wallet_state[(w.exchange, w.coin)] = (w.deposit_ok, w.withdraw_ok)
             writers["wallet"].add(wallet_row(w))
+            if w.initial:
+                continue
             if w.coin not in universe_set and w.coin != "USDT":
                 continue
             key = f"wallet:{w.exchange}:{w.coin}"
@@ -225,6 +262,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(status_reporter(), name="status"),
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
+        asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),
     ]
 
     alerter.alert(
