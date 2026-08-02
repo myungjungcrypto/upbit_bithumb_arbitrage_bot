@@ -10,9 +10,15 @@ from decimal import Decimal
 
 from ..bus import Bus
 from ..config import Config
-from ..models import Book, Fx, now_ms
+from ..models import Book, D, Fx, now_ms
 from .books import BookStore
-from .premium import exec_premium, inbound_gross_edge, outbound_gross_edge, theo_premium
+from .premium import (
+    capacity_at_threshold,
+    exec_premium,
+    inbound_gross_edge,
+    outbound_gross_edge,
+    theo_premium,
+)
 
 
 class PremiumEngine:
@@ -25,6 +31,7 @@ class PremiumEngine:
         self.fx_rate: Decimal | None = None
         self.fx_ts: int = 0
         self._last_calc: dict[str, float] = {}
+        self._edge_threshold = D(cfg.alerts.get("net_edge_threshold", 0.005))
 
     def on_fx(self, fx: Fx) -> None:
         self.fx_rate = fx.rate
@@ -76,6 +83,23 @@ class PremiumEngine:
             fee_total = fee_ovs + fee_dom * 2
             wd_cost_usd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
 
+            # capacity: 임계 순엣지를 유지하는 최대 명목 (§1.4 사이징 자동화)
+            thr = self._edge_threshold
+            usdt_mid_now = usdt.mid
+
+            def in_net(n: Decimal) -> Decimal | None:
+                g = inbound_gross_edge(ovs, dom, usdt, n)
+                return None if g is None else g - fee_total - wd_cost_usd / n
+
+            def out_net(n_usd: Decimal) -> Decimal | None:
+                if usdt_mid_now is None or usdt_mid_now <= 0:
+                    return None
+                g = outbound_gross_edge(dom, ovs, usdt, n_usd * usdt_mid_now)
+                return None if g is None else g - fee_total - wd_cost_usd / n_usd
+
+            in_cap = capacity_at_threshold(in_net, thr)
+            out_cap = capacity_at_threshold(out_net, thr)
+
             for notional_usd in self.cfg.ladder_usd:
                 if usdt_mid is None or usdt_mid <= 0:
                     continue
@@ -100,6 +124,8 @@ class PremiumEngine:
                         "out_net": _f(out_gross - fee_total - wd_ratio) if out_gross is not None else None,
                         "dom_ts_lag_ms": ts - dom.ts_local,
                         "ovs_ts_lag_ms": ts - ovs.ts_local,
+                        "in_capacity_usd": _f(in_cap),
+                        "out_capacity_usd": _f(out_cap),
                     }
                 )
         return rows

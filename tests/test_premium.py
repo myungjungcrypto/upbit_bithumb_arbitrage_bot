@@ -97,6 +97,46 @@ def test_roundtrip_depth_exhaustion_returns_none():
     assert inbound_gross_edge(ovs, thin_dom, usdtkrw, D(1000)) is None
 
 
+# ---------- capacity (사이징 자동화) ----------
+
+def test_capacity_at_threshold_basic():
+    from kimp.engine.premium import capacity_at_threshold
+
+    # net(n): 5000 이하에서 1%, 그 위에서 0% — 경계가 [5000, 10000) 사이에서 잡혀야 함
+    def net(n):
+        return D("0.01") if n <= 5000 else D("0")
+
+    cap = capacity_at_threshold(net, D("0.005"), lo=D(1000))
+    assert cap is not None
+    assert D(4999) <= cap <= D(10000)
+    assert net(cap) >= D("0.005")
+
+
+def test_capacity_none_when_no_opportunity():
+    from kimp.engine.premium import capacity_at_threshold
+
+    assert capacity_at_threshold(lambda n: D("0.001"), D("0.005")) is None
+    assert capacity_at_threshold(lambda n: None, D("0.005")) is None
+
+
+def test_capacity_with_real_books():
+    from kimp.engine.premium import capacity_at_threshold, inbound_gross_edge
+
+    # 해외 asks 100×50개(=5000 USDT어치)만 존재 → 그 너머는 깊이 부족(None)
+    ovs = book("binance", "XRP", "USDT", levels((99, 10**6)), levels((100, 50)))
+    dom = book("upbit", "XRP", "KRW", levels((145000, 10**6)), levels((145500, 10**6)))
+    usdtkrw = book("upbit", "USDT", "KRW", levels((1399, 10**8)), levels((1400, 10**8)))
+
+    def net(n):
+        g = inbound_gross_edge(ovs, dom, usdtkrw, n)
+        return None if g is None else g  # 수수료 0 가정
+
+    cap = capacity_at_threshold(net, D("0.005"), lo=D(1000))
+    # 엣지 자체는 ~3.5%로 임계 초과, 깊이 한계(5000 USDT)가 capacity를 결정
+    assert cap is not None
+    assert D(4000) <= cap <= D(5000)
+
+
 # ---------- mid 김프 ----------
 
 def test_theo_and_exec_premium():

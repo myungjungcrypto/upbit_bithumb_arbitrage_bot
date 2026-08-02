@@ -87,6 +87,44 @@ def outbound_gross_edge(
     return krw_out / notional_krw - 1
 
 
+def capacity_at_threshold(
+    net_edge_fn,
+    threshold: Decimal,
+    lo: Decimal = Decimal(1000),
+    hi: Decimal = Decimal(1_000_000),
+) -> Decimal | None:
+    """순엣지 ≥ threshold 를 유지하는 최대 명목 금액 (§1.4 — '얼마를 할지'의 자동화).
+
+    net_edge_fn(notional) -> Decimal | None (깊이 부족 시 None).
+    net(n)은 소액에선 고정비(출금비/n) 때문에 오르다가 슬리피지로 내려가는 단봉형이므로,
+    기하 스캔으로 마지막 통과점을 찾고 그 위 구간을 이분 탐색으로 정밀화한다.
+    반환 None = lo에서도 임계 미달 (기회 없음).
+    """
+    last_good: Decimal | None = None
+    first_bad: Decimal | None = None
+    n = lo
+    while n <= hi:
+        e = net_edge_fn(n)
+        if e is not None and e >= threshold:
+            last_good = n
+        elif last_good is not None:
+            first_bad = n
+            break
+        n *= 2
+    if last_good is None:
+        return None
+    if first_bad is None:
+        return min(last_good, hi)
+    for _ in range(12):
+        mid = (last_good + first_bad) / 2
+        e = net_edge_fn(mid)
+        if e is not None and e >= threshold:
+            last_good = mid
+        else:
+            first_bad = mid
+    return last_good.quantize(Decimal("1"))
+
+
 def theo_premium(dom: Book, ovs: Book, usd_krw: Decimal) -> Decimal | None:
     dm, om = dom.mid, ovs.mid
     if dm is None or om is None or usd_krw <= 0:

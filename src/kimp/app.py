@@ -132,12 +132,14 @@ async def run(cfg: Config) -> None:
                 for direction in ("in", "out"):
                     net = r.get(f"{direction}_net")
                     if net is not None and net >= edge_thr:
+                        cap = r.get(f"{direction}_capacity_usd")
+                        cap_txt = f", capacity ~${cap:,.0f}" if cap else ""
                         alerter.alert(
                             INFO,
                             f"edge:{r['coin']}:{direction}:{r['dom_ex']}",
                             f"{r['coin']} {direction.upper()} 순엣지 {net*100:.2f}% "
                             f"({r['dom_ex']}↔{r['ovs_ex']}, ${r['notional_usd']:,.0f}, "
-                            f"실행김프 {(r['exec_mid'] or 0)*100:.2f}%)",
+                            f"실행김프 {(r['exec_mid'] or 0)*100:.2f}%{cap_txt})",
                         )
 
     health_cd = float(cfg.alerts.get("health_cooldown_sec", 600))
