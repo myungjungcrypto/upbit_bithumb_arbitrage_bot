@@ -58,11 +58,12 @@ storage:
   root: data
   flush_rows: 5000
   flush_sec: 30
-  book_snapshot_interval_ms: 5000   # 호가 스냅샷 저장 스로틀 (계산은 전 틱, 저장은 5초)
+  book_snapshot_interval_ms: 10000  # 호가 스냅샷 저장 스로틀 (계산은 전 틱, 저장은 10초)
   premium_min_change: 0.0005        # 김프 틱 저장 게이트: 순엣지 5bp 이상 변할 때만 기록
-  premium_heartbeat_ms: 10000       # 변화 없어도 10초마다 1행 (시계열 연속성)
-  retention_days:                   # janitor가 6시간마다 초과 파티션 삭제
+  premium_heartbeat_ms: 30000       # 변화 없어도 30초마다 1행 (연속성 — 변화는 게이트가 즉시 잡음)
+  retention_days:                   # janitor가 6시간마다 초과 파티션 삭제 → 총량 평형 보장
     default: 30
+    premium: 21
     books: 3                        # 호가 원본은 디버깅용 롤링 윈도우만
     trades: 14
 
