@@ -32,22 +32,35 @@ class PremiumEngine:
         self.fx_ts: int = 0
         self._last_calc: dict[str, float] = {}
         self._edge_threshold = D(cfg.alerts.get("net_edge_threshold", 0.005))
+        # KRW-USDT 마켓은 매우 활발해서 전 코인 재계산을 상시 유발함 — 팬아웃은 별도(느린) 스로틀.
+        # 코인 자신의 호가 이벤트는 여전히 min_interval_ms(기본 200ms)로 즉시 반응 (§1.4 속도 원칙 유지)
+        self._usdt_fanout_ms = int(cfg.raw.get("engine", {}).get("usdt_fanout_interval_ms", 1000))
+        self._last_fanout: dict[str, float] = {}
 
     def on_fx(self, fx: Fx) -> None:
         self.fx_rate = fx.rate
         self.fx_ts = fx.ts_local
 
     def on_book(self, book: Book) -> None:
-        # KRW-USDT 마켓 갱신은 전 코인에 영향을 주지만, 코인별 스로틀이 폭주를 막는다
-        coins = self.coins if book.base == "USDT" else [book.base]
-        for coin in coins:
-            if coin not in self._coin_set:
-                continue
-            if self._throttled(coin):
-                continue
-            rows = self.compute(coin)
-            if rows:
-                self.bus.publish("premium", rows)
+        if book.base == "USDT":
+            now = time.monotonic()
+            for coin in self.coins:
+                last = self._last_fanout.get(coin)
+                if last is not None and (now - last) * 1000 < self._usdt_fanout_ms:
+                    continue
+                self._last_fanout[coin] = now
+                if self._throttled(coin):
+                    continue
+                rows = self.compute(coin)
+                if rows:
+                    self.bus.publish("premium", rows)
+            return
+        coin = book.base
+        if coin not in self._coin_set or self._throttled(coin):
+            return
+        rows = self.compute(coin)
+        if rows:
+            self.bus.publish("premium", rows)
 
     def _throttled(self, coin: str) -> bool:
         now = time.monotonic()

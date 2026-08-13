@@ -24,8 +24,8 @@ staleness:
   fx_ms: 120000
 
 engine:
-  min_interval_ms: 200       # 코인당 김프 재계산 최소 간격 (탐지 <100ms 요건은 WS 푸시가 담당,
-                             # 계산 스로틀은 CPU 보호용)
+  min_interval_ms: 200           # 코인당 김프 재계산 최소 간격 (탐지 <100ms 요건은 WS 푸시가 담당)
+  usdt_fanout_interval_ms: 1000  # KRW-USDT 변동발 전 코인 재계산 주기 — 코인 자체 호가 이벤트는 min_interval_ms로 즉시 반응
 
 # taker 수수료 추정 초기값. 등급·쿠폰에 따라 다름 → 실계정 값으로 교체 필수 (VERIFY)
 fees:

@@ -216,8 +216,18 @@ async def run(cfg: Config) -> None:
             else:
                 alerter.alert(INFO, key + ":ok", f"{w.exchange} {w.coin} 입출금 정상화", cooldown=health_cd)
 
+    def _rss_mb() -> float:
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS"):
+                        return int(line.split()[1]) / 1024
+        except Exception:
+            pass
+        return 0.0
+
     async def status_reporter() -> None:
-        """주기 상태 로그 + 텔레그램 하트비트 (PLAN §1.3 데드맨의 발신측)."""
+        """주기 상태 로그 + 텔레그램 하트비트 (PLAN §1.3 데드맨의 발신측). RSS 추적은 누수 감시용."""
         while not stop.is_set():
             try:
                 await asyncio.wait_for(stop.wait(), timeout=60.0)
@@ -225,8 +235,11 @@ async def run(cfg: Config) -> None:
             except asyncio.TimeoutError:
                 pass
             counts = {c.name: c.msg_count for c in collectors}
-            log.info("status: msgs=%s dropped=%s", counts, dict(bus.dropped))
-            alerter.alert(INFO, "heartbeat", f"수집 정상 — 메시지 수신 {counts}", cooldown=3600)
+            log.info("status: msgs=%s dropped=%s rss=%.0fMB", counts, dict(bus.dropped), _rss_mb())
+            alerter.alert(
+                INFO, "heartbeat",
+                f"수집 정상 — 메시지 수신 {counts}, RSS {_rss_mb():.0f}MB", cooldown=3600,
+            )
 
     # --- 수집기 기동 ---
     # 국내·바이낸스는 해석된 유니버스, 바이비트·OKX는 시드 코인만 (P0: 김프 기준은 binance)
