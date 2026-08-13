@@ -56,13 +56,12 @@ def purge_old(root: str | Path, days_by_table: dict[str, int], default_days: int
         if not table_dir.is_dir():
             continue
         days = int(days_by_table.get(table_dir.name, default_days))
-        cutoff = today - timedelta(days=days)
         for part in table_dir.glob("date=*"):
             try:
                 d = date.fromisoformat(part.name.split("=", 1)[1])
             except ValueError:
                 continue
-            if d < cutoff:
+            if (today - d).days >= days:  # 보존 N일 = 오늘 포함 최근 N일 유지
                 try:
                     shutil.rmtree(part)
                     removed.append(str(part))
