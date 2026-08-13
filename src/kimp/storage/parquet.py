@@ -7,14 +7,70 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 log = logging.getLogger("storage.parquet")
+
+
+def premium_store_gate(
+    prev: tuple[float | None, float | None, int] | None,
+    in_net: float | None,
+    out_net: float | None,
+    ts: int,
+    min_change: float,
+    heartbeat_ms: int,
+) -> bool:
+    """김프 틱 저장 게이트 — 순엣지가 min_change 이상 변했거나 heartbeat 주기가 지났을 때만 기록.
+
+    계산은 매 틱 하되(트리거·알림은 실시간), 저장은 정보량이 있을 때만 — 디스크 폭주 방지.
+    prev = (마지막 저장 in_net, out_net, ts). None이면 첫 기록."""
+    if prev is None:
+        return True
+    p_in, p_out, p_ts = prev
+    if ts - p_ts >= heartbeat_ms:
+        return True
+
+    def moved(a: float | None, b: float | None) -> bool:
+        if (a is None) != (b is None):
+            return True  # 깊이 소진 ↔ 회복 전환은 그 자체가 정보
+        if a is None:
+            return False
+        return abs(a - b) >= min_change
+
+    return moved(in_net, p_in) or moved(out_net, p_out)
+
+
+def purge_old(root: str | Path, days_by_table: dict[str, int], default_days: int, today: date) -> list[str]:
+    """보존 기간이 지난 date= 파티션 삭제. 삭제한 경로 목록 반환 (janitor에서 주기 호출)."""
+    removed: list[str] = []
+    rootp = Path(root)
+    if not rootp.exists():
+        return removed
+    for table_dir in rootp.iterdir():
+        if not table_dir.is_dir():
+            continue
+        days = int(days_by_table.get(table_dir.name, default_days))
+        cutoff = today - timedelta(days=days)
+        for part in table_dir.glob("date=*"):
+            try:
+                d = date.fromisoformat(part.name.split("=", 1)[1])
+            except ValueError:
+                continue
+            if d < cutoff:
+                try:
+                    shutil.rmtree(part)
+                    removed.append(str(part))
+                except OSError:
+                    log.exception("retention purge failed: %s", part)
+    if removed:
+        log.info("retention purge: %d partitions removed", len(removed))
+    return removed
 
 
 class BufferedParquetWriter:

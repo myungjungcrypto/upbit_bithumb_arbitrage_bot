@@ -24,6 +24,8 @@ from .storage.parquet import (
     fx_row,
     flusher,
     health_row,
+    premium_store_gate,
+    purge_old,
     trade_row,
     wallet_row,
 )
@@ -124,6 +126,10 @@ async def run(cfg: Config) -> None:
     # 거래소별 최신 입출금 상태 캐시 — T4 게이트 ①의 판단용 (P0는 빗썸만, 업비트/해외는 P0.5)
     wallet_state: dict[tuple[str, str], tuple[bool, bool]] = {}
 
+    prem_min_change = float(st.get("premium_min_change", 0.0005))
+    prem_heartbeat_ms = int(st.get("premium_heartbeat_ms", 10000))
+    prem_last_stored: dict[tuple, tuple[float | None, float | None, int]] = {}
+
     async def consume_premium() -> None:
         q = bus.subscribe("premium")
         while not stop.is_set():
@@ -131,7 +137,14 @@ async def run(cfg: Config) -> None:
                 rows = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
-            writers["premium"].add_many(rows)
+            for r in rows:
+                gk = (r["coin"], r["dom_ex"], r["notional_usd"])
+                if premium_store_gate(
+                    prem_last_stored.get(gk), r["in_net"], r["out_net"], r["ts"],
+                    prem_min_change, prem_heartbeat_ms,
+                ):
+                    prem_last_stored[gk] = (r["in_net"], r["out_net"], r["ts"])
+                    writers["premium"].add(r)
             for r in rows:
                 for direction in ("in", "out"):
                     net = r.get(f"{direction}_net")
@@ -226,6 +239,24 @@ async def run(cfg: Config) -> None:
             pass
         return 0.0
 
+    retention = st.get("retention_days", {}) or {}
+    retention_default = int(retention.get("default", 30))
+
+    async def retention_janitor() -> None:
+        """보존 기간 초과 파티션 삭제 — 기동 직후 1회 + 6시간마다 (디스크 폭주 방지)."""
+        from datetime import datetime as _dt, timezone as _tz
+
+        while not stop.is_set():
+            try:
+                purge_old(root, retention, retention_default, _dt.now(_tz.utc).date())
+            except Exception:
+                log.exception("retention janitor failed")
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=6 * 3600)
+                return
+            except asyncio.TimeoutError:
+                pass
+
     async def status_reporter() -> None:
         """주기 상태 로그 + 텔레그램 하트비트 (PLAN §1.3 데드맨의 발신측). RSS 추적은 누수 감시용."""
         while not stop.is_set():
@@ -288,6 +319,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(consume_health(), name="consume.health"),
         asyncio.create_task(consume_wallet(), name="consume.wallet"),
         asyncio.create_task(status_reporter(), name="status"),
+        asyncio.create_task(retention_janitor(), name="retention"),
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
         asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),
