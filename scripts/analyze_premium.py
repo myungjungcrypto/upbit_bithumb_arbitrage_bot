@@ -27,7 +27,9 @@ HORIZONS_MIN = (5, 15, 30)
 
 
 def load(data_root: str, coin: str | None, since: str | None) -> pl.DataFrame:
-    lf = pl.scan_parquet(f"{data_root}/premium/**/*.parquet")
+    # 필요한 컬럼만 프로젝션 — 소형 파일 다수 환경에서 IO·메모리 수배 절감
+    cols = ["ts", "coin", "dom_ex", "notional_usd", "in_net", "out_net", "exec_mid"]
+    lf = pl.scan_parquet(f"{data_root}/premium/**/*.parquet").select(cols)
     if coin:
         lf = lf.filter(pl.col("coin") == coin)
     if since:

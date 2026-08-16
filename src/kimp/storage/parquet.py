@@ -72,6 +72,64 @@ def purge_old(root: str | Path, days_by_table: dict[str, int], default_days: int
     return removed
 
 
+def compact_partition(part_dir: Path) -> int:
+    """파티션 내 소형 parquet 파일들을 단일 파일로 병합. 반환: 병합한 파일 수 (0=스킵).
+
+    30초 플러시가 만드는 파일 폭탄(일 ~3천 개) 때문에 분석이 IO에 잡아먹히는 문제의 해법.
+    스트리밍 병합이라 메모리 사용은 배치 크기로 제한됨. 스키마 불일치 등 실패 시 원본 유지."""
+    import pyarrow.dataset as pads
+
+    files = sorted(part_dir.glob("part-*.parquet"))
+    if len(files) < 2:
+        return 0
+    tmp = part_dir / ".compact-tmp.parquet"
+    writer = None
+    try:
+        dataset = pads.dataset([str(f) for f in files], format="parquet")
+        for batch in dataset.scanner(batch_size=65536).to_batches():
+            if writer is None:
+                writer = pq.ParquetWriter(tmp, batch.schema, compression="zstd")
+            writer.write_batch(batch)
+        if writer is None:
+            return 0
+        writer.close()
+        writer = None
+        tmp.rename(part_dir / f"compacted-{files[0].name.removeprefix('part-')}")
+        for f in files:
+            f.unlink()
+        return len(files)
+    except Exception:
+        log.exception("compaction failed (원본 유지): %s", part_dir)
+        return 0
+    finally:
+        if writer is not None:
+            writer.close()
+        tmp.unlink(missing_ok=True)
+
+
+def compact_old_partitions(root: str | Path, today: date, min_files: int = 24) -> int:
+    """오늘 이전(불변) 파티션 중 파일 수가 많은 것들을 병합. 반환: 병합된 파일 총수."""
+    total = 0
+    rootp = Path(root)
+    if not rootp.exists():
+        return 0
+    for table_dir in rootp.iterdir():
+        if not table_dir.is_dir():
+            continue
+        for part in table_dir.glob("date=*"):
+            try:
+                d = date.fromisoformat(part.name.split("=", 1)[1])
+            except ValueError:
+                continue
+            if d >= today:
+                continue  # 오늘 파티션은 아직 쓰는 중 — 건드리지 않음
+            if len(list(part.glob("part-*.parquet"))) >= min_files:
+                total += compact_partition(part)
+    if total:
+        log.info("compaction: %d small files merged", total)
+    return total
+
+
 class BufferedParquetWriter:
     def __init__(self, root: str | Path, table: str, flush_rows: int = 5000, flush_sec: float = 30.0) -> None:
         self.root = Path(root)

@@ -1,7 +1,32 @@
-"""저장 게이트·보존 janitor 검증 — 디스크 폭주 재발 방지의 핵심 로직."""
+"""저장 게이트·보존 janitor·컴팩션 검증 — 디스크 폭주·파일 폭탄 재발 방지의 핵심 로직."""
 from datetime import date
 
-from kimp.storage.parquet import premium_store_gate, purge_old
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from kimp.storage.parquet import compact_old_partitions, premium_store_gate, purge_old
+
+
+def test_compaction_merges_small_files(tmp_path):
+    part = tmp_path / "premium" / "date=2026-08-01"
+    part.mkdir(parents=True)
+    for i in range(3):
+        pq.write_table(
+            pa.Table.from_pylist([{"ts": i * 10 + j, "coin": "XRP", "v": float(j)} for j in range(5)]),
+            part / f"part-{i:03d}.parquet",
+        )
+    today_part = tmp_path / "premium" / "date=2026-08-04"
+    today_part.mkdir()
+    pq.write_table(pa.Table.from_pylist([{"ts": 1, "coin": "BTC", "v": 0.0}]), today_part / "part-000.parquet")
+
+    merged = compact_old_partitions(tmp_path, today=date(2026, 8, 4), min_files=2)
+
+    assert merged == 3
+    files = list(part.glob("*.parquet"))
+    assert len(files) == 1 and files[0].name.startswith("compacted-")
+    assert pq.read_table(files[0]).num_rows == 15  # 행 보존
+    # 오늘 파티션은 건드리지 않음
+    assert len(list(today_part.glob("part-*.parquet"))) == 1
 
 
 def test_gate_first_row_always_stored():

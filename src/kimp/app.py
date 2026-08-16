@@ -21,6 +21,7 @@ from .engine.runner import PremiumEngine
 from .storage.parquet import (
     BufferedParquetWriter,
     book_row,
+    compact_old_partitions,
     fx_row,
     flusher,
     health_row,
@@ -243,12 +244,21 @@ async def run(cfg: Config) -> None:
     retention_default = int(retention.get("default", 30))
 
     async def retention_janitor() -> None:
-        """보존 기간 초과 파티션 삭제 — 기동 직후 1회 + 6시간마다 (디스크 폭주 방지)."""
+        """보존 초과 파티션 삭제 + 지난 파티션 소형 파일 컴팩션 — 기동 직후 1회 + 6시간마다.
+        디스크 IO 작업이므로 이벤트 루프를 막지 않게 스레드 실행."""
         from datetime import datetime as _dt, timezone as _tz
 
+        loop = asyncio.get_running_loop()
         while not stop.is_set():
+            today = _dt.now(_tz.utc).date()
             try:
-                purge_old(root, retention, retention_default, _dt.now(_tz.utc).date())
+                await loop.run_in_executor(
+                    None,
+                    lambda: (
+                        purge_old(root, retention, retention_default, today),
+                        compact_old_partitions(root, today),
+                    ),
+                )
             except Exception:
                 log.exception("retention janitor failed")
             try:
