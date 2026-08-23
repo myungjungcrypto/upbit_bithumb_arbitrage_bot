@@ -15,15 +15,20 @@
   python scripts/analyze_premium.py --thr 0.005 [--coin XRP] [--since 2026-08-14]
 
 서버 보호 실행(권장 — 분석이 폭주해도 박스가 아니라 분석만 죽는다):
-  sudo systemd-run --scope -p MemoryMax=2G -p MemorySwapMax=0 --uid=kimp \\
+  sudo systemd-run --scope -p MemoryMax=4G -p MemorySwapMax=0 --uid=kimp \\
     bash -c 'cd /opt/kimp/app && nice -n 10 /opt/kimp/venv/bin/python scripts/analyze_premium.py --thr 0.005'
 """
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 import sys
 from datetime import date
 from pathlib import Path
+
+# 공유 서버 보호: 병렬 파일 디코드의 순간 메모리 폭을 제한 (import 전에 설정해야 적용됨)
+os.environ.setdefault("POLARS_MAX_THREADS", "2")
 
 try:
     import polars as pl
@@ -254,6 +259,7 @@ def main() -> None:
                 if not ent.is_empty():
                     harvest_rows[dkey].extend(apply_cooldown(ent, args.cycle_cap, gap_ms, last_entry[dkey]))
         del day  # 일 청크 메모리 즉시 반환
+        gc.collect()
 
     span_days = max(((ts_max or 0) - (ts_min or 0)) / 86_400_000, 1e-9)
     print(f"# premium ticks: {total_rows:,} rows, {span_days:.1f}일, 파티션 {len(parts)}개 (일 청크 처리)")
