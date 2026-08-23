@@ -75,8 +75,11 @@ def load_wallet(data_root: str) -> pl.DataFrame | None:
         return None
 
 
-def episodes(df: pl.DataFrame, edge_col: str, thr: float, gap_ms: int = 5000) -> pl.DataFrame:
-    """(coin, dom_ex, notional_usd)별로 엣지≥thr 연속 구간을 에피소드로 묶는다."""
+def episodes(df: pl.DataFrame, edge_col: str, thr: float, gap_ms: int = 60_000) -> pl.DataFrame:
+    """(coin, dom_ex, notional_usd)별로 엣지≥thr 연속 구간을 에피소드로 묶는다.
+
+    gap_ms는 저장 게이트의 하트비트(30s)보다 커야 한다 — 작으면 지속 기회 하나가
+    수백 개의 1틱 에피소드로 조각나 통계·메모리가 모두 깨진다 (2026-08-23 실측 버그)."""
     d = (
         df.select(["ts", "coin", "dom_ex", "notional_usd", edge_col])
         .drop_nulls(edge_col)
@@ -128,6 +131,8 @@ def persistence_samples(df: pl.DataFrame, ep: pl.DataFrame) -> pl.DataFrame:
         on=["coin", "dom_ex", "notional_usd", "start"],
         how="inner",
     )
+    if len(entries) > 50_000:  # 메모리 안전벨트 — 통계에는 5만 샘플이면 충분
+        entries = entries.head(50_000)
     out = []
     for h in HORIZONS_MIN:
         target = entries.with_columns((pl.col("start") + h * 60_000).alias("t_h")).sort("t_h")
@@ -150,16 +155,24 @@ def persistence_samples(df: pl.DataFrame, ep: pl.DataFrame) -> pl.DataFrame:
     return pl.concat(out) if out else pl.DataFrame([])
 
 
-def harvest_entries(
-    df: pl.DataFrame, ep: pl.DataFrame, direction: str, wallet: pl.DataFrame
-) -> pl.DataFrame:
-    """에피소드 진입 후보 + 진입 시점 지갑 상태 as-of 결합 → 게이트 통과분만.
+def harvest_cycles(
+    df: pl.DataFrame,
+    ep: pl.DataFrame,
+    direction: str,
+    wallet: pl.DataFrame,
+    cycle_cap: float,
+    cooldown_ms: int,
+    last_entry: dict[tuple, int],
+) -> list[dict]:
+    """에피소드 → 가상 사이클 목록. 진입 시점 지갑 상태 as-of 결합 (미확인 제외, T4-①).
 
-    IN=국내 입금 가능 / OUT=국내 출금 가능. 미확인(null)은 제외 (T4-① 보수 원칙)."""
+    지속 에피소드는 쿨다운 주기마다 재진입을 생성한다 — 2시간 열려 있는 기회는
+    사이클을 여러 번 돈다 (첫 진입은 실측 엣지, 재진입은 에피소드 평균 엣지로 근사).
+    last_entry(쿨다운 상태)는 일 경계를 넘어 유지."""
     cap_col = f"{direction}_capacity_usd"
     net_col = f"{direction}_net"
-    entries = (
-        ep.select(["coin", "dom_ex", "notional_usd", "start"])
+    starts = (
+        ep.select(["coin", "dom_ex", "notional_usd", "start", "duration_s", "mean"])
         .join(
             df.select(["ts", "coin", "dom_ex", "notional_usd", net_col, cap_col]).rename({"ts": "start"}),
             on=["coin", "dom_ex", "notional_usd", "start"],
@@ -167,38 +180,35 @@ def harvest_entries(
         )
         .sort("start")
     )
-    if entries.is_empty():
-        return entries
-    entries = entries.join_asof(
+    if starts.is_empty():
+        return []
+    starts = starts.join_asof(
         wallet, left_on="start", right_on="wts", by=["dom_ex", "coin"], strategy="backward"
     )
     flag = "deposit_ok" if direction == "in" else "withdraw_ok"
-    return (
-        entries.filter(pl.col(flag) == True)  # noqa: E712 — null(미확인)도 제외
-        .rename({net_col: "edge", cap_col: "cap"})
-        .select(["coin", "dom_ex", "start", "edge", "cap"])
-        .sort("start")
-    )
+    starts = starts.filter(pl.col(flag) == True).sort("start")  # noqa: E712 — null(미확인)도 제외
 
-
-def apply_cooldown(
-    entries: pl.DataFrame, cycle_cap: float, gap_ms: int, last_entry: dict[tuple, int]
-) -> list[dict]:
-    """코인·거래소별 재진입 쿨다운 적용 — last_entry 상태는 일 경계를 넘어 유지."""
     rows: list[dict] = []
-    for r in entries.iter_rows(named=True):
+    for r in starts.iter_rows(named=True):
+        cap, entry_edge = r.get(cap_col), r.get(net_col)
+        if cap is None or entry_edge is None or cap <= 0:
+            continue
         key = (r["coin"], r["dom_ex"])
-        if key in last_entry and r["start"] - last_entry[key] < gap_ms:
-            continue
-        cap, edge = r.get("cap"), r.get("edge")
-        if cap is None or edge is None or cap <= 0:
-            continue
-        last_entry[key] = r["start"]
         notional = min(cap, cycle_cap)
-        rows.append(
-            {"coin": r["coin"], "dom_ex": r["dom_ex"], "start": r["start"],
-             "notional_usd": notional, "edge": edge, "profit_usd": notional * edge}
-        )
+        duration_ms = int((r.get("duration_s") or 0) * 1000)
+        mean_edge = r.get("mean") or entry_edge
+        t = r["start"]
+        first = True
+        while t <= r["start"] + duration_ms:
+            if key not in last_entry or t - last_entry[key] >= cooldown_ms:
+                last_entry[key] = t
+                edge = entry_edge if first else mean_edge  # 재진입은 평균 엣지 근사
+                rows.append(
+                    {"coin": r["coin"], "dom_ex": r["dom_ex"], "start": t,
+                     "notional_usd": notional, "edge": edge, "profit_usd": notional * edge}
+                )
+            first = False
+            t += cooldown_ms
     return rows
 
 
@@ -212,6 +222,7 @@ def main() -> None:
     ap.add_argument("--cycle-cap", type=float, default=2000, help="가상 사이클당 명목 상한 USD (T13 제안치)")
     ap.add_argument("--cycle-minutes", type=float, default=30, help="코인·거래소별 재진입 쿨다운")
     ap.add_argument("--capital", type=float, default=30000, help="수익률 환산 기준 자본 USD")
+    ap.add_argument("--gap-seconds", type=float, default=60, help="에피소드 병합 간격 (저장 하트비트 30s보다 커야 함)")
     args = ap.parse_args()
 
     since = date.fromisoformat(args.since) if args.since else None
@@ -247,7 +258,7 @@ def main() -> None:
             base_rung = float(day["notional_usd"].min())
         print(f"  [{d}] {len(day):,} rows", file=sys.stderr)
         for dkey, col, *_ in directions:
-            ep = episodes(day, col, args.thr)
+            ep = episodes(day, col, args.thr, int(args.gap_seconds * 1000))
             if ep.is_empty():
                 continue
             ep_all[dkey].append(ep)
@@ -255,9 +266,12 @@ def main() -> None:
             if not ps.is_empty():
                 pers_all[dkey].append(ps)
             if wallet is not None:
-                ent = harvest_entries(day, ep.filter(pl.col("notional_usd") == base_rung), dkey, wallet)
-                if not ent.is_empty():
-                    harvest_rows[dkey].extend(apply_cooldown(ent, args.cycle_cap, gap_ms, last_entry[dkey]))
+                harvest_rows[dkey].extend(
+                    harvest_cycles(
+                        day, ep.filter(pl.col("notional_usd") == base_rung), dkey, wallet,
+                        args.cycle_cap, gap_ms, last_entry[dkey],
+                    )
+                )
         del day  # 일 청크 메모리 즉시 반환
         gc.collect()
 
