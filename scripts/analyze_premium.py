@@ -55,11 +55,24 @@ def day_partitions(data_root: str, since: date | None) -> list[tuple[date, Path]
     return parts
 
 
+F32_COLS = ["in_net", "out_net", "exec_mid", "in_capacity_usd", "out_capacity_usd"]
+
+
 def load_day(part_dir: Path, coin: str | None) -> pl.DataFrame:
     lf = pl.scan_parquet(str(part_dir / "*.parquet")).select(COLS)
     if coin:
         lf = lf.filter(pl.col("coin") == coin)
-    return lf.collect().sort("ts")
+    # 메모리 다이어트: 문자열 → Categorical(정수 코드), 지표 → f32 — 12M행 파티션이 ~1/3로
+    # (main()의 enable_string_cache 전제 — 일 경계·wallet 조인에서 카테고리 호환)
+    return (
+        lf.collect()
+        .with_columns(
+            pl.col("coin").cast(pl.Categorical),
+            pl.col("dom_ex").cast(pl.Categorical),
+            *(pl.col(c).cast(pl.Float32) for c in F32_COLS),
+        )
+        .sort("ts")
+    )
 
 
 def load_wallet(data_root: str) -> pl.DataFrame | None:
@@ -70,7 +83,13 @@ def load_wallet(data_root: str) -> pl.DataFrame | None:
             .select(["ts_local", "exchange", "coin", "deposit_ok", "withdraw_ok"])
             .collect()
         )
-        return w.rename({"ts_local": "wts", "exchange": "dom_ex"}).sort("wts") if not w.is_empty() else None
+        if w.is_empty():
+            return None
+        return (
+            w.rename({"ts_local": "wts", "exchange": "dom_ex"})
+            .with_columns(pl.col("coin").cast(pl.Categorical), pl.col("dom_ex").cast(pl.Categorical))
+            .sort("wts")
+        )
     except Exception:
         return None
 
@@ -224,6 +243,8 @@ def main() -> None:
     ap.add_argument("--capital", type=float, default=30000, help="수익률 환산 기준 자본 USD")
     ap.add_argument("--gap-seconds", type=float, default=60, help="에피소드 병합 간격 (저장 하트비트 30s보다 커야 함)")
     args = ap.parse_args()
+
+    pl.enable_string_cache()  # Categorical을 일 경계·wallet 조인·concat에서 호환시키는 전역 캐시
 
     since = date.fromisoformat(args.since) if args.since else None
     parts = day_partitions(args.data, since)
