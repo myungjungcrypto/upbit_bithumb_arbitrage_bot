@@ -182,6 +182,8 @@ def harvest_cycles(
     cycle_cap: float,
     cooldown_ms: int,
     last_entry: dict[tuple, int],
+    max_edge: float,
+    suspects: list[dict],
 ) -> list[dict]:
     """에피소드 → 가상 사이클 목록. 진입 시점 지갑 상태 as-of 결합 (미확인 제외, T4-①).
 
@@ -216,13 +218,16 @@ def harvest_cycles(
         notional = min(cap, cycle_cap)
         duration_ms = int((r.get("duration_s") or 0) * 1000)
         mean_edge = r.get("mean") or entry_edge
+        # 엣지 상한 초과 = 티커 충돌/해외측 전송불가 의심 (V7) — 집계 대신 요주의 목록으로.
+        # 진짜 김프는 재정거래로 눌리므로 초대형 엣지가 '지속'되는 것 자체가 전송 불가의 증거
+        target = suspects if entry_edge > max_edge or mean_edge > max_edge else rows
         t = r["start"]
         first = True
         while t <= r["start"] + duration_ms:
             if key not in last_entry or t - last_entry[key] >= cooldown_ms:
                 last_entry[key] = t
                 edge = entry_edge if first else mean_edge  # 재진입은 평균 엣지 근사
-                rows.append(
+                target.append(
                     {"coin": r["coin"], "dom_ex": r["dom_ex"], "start": t,
                      "notional_usd": notional, "edge": edge, "profit_usd": notional * edge}
                 )
@@ -242,6 +247,8 @@ def main() -> None:
     ap.add_argument("--cycle-minutes", type=float, default=30, help="코인·거래소별 재진입 쿨다운")
     ap.add_argument("--capital", type=float, default=30000, help="수익률 환산 기준 자본 USD")
     ap.add_argument("--gap-seconds", type=float, default=60, help="에피소드 병합 간격 (저장 하트비트 30s보다 커야 함)")
+    ap.add_argument("--max-edge", type=float, default=0.05,
+                    help="가상 수확 엣지 상한 — 초과분은 티커충돌/전송불가 의심으로 제외·별도 보고 (V7)")
     args = ap.parse_args()
 
     pl.enable_string_cache()  # Categorical을 일 경계·wallet 조인·concat에서 호환시키는 전역 캐시
@@ -262,6 +269,7 @@ def main() -> None:
     ep_all: dict[str, list] = {"in": [], "out": []}
     pers_all: dict[str, list] = {"in": [], "out": []}
     harvest_rows: dict[str, list] = {"in": [], "out": []}
+    suspect_rows: dict[str, list] = {"in": [], "out": []}
     last_entry: dict[str, dict] = {"in": {}, "out": {}}
     gap_ms = int(args.cycle_minutes * 60_000)
     total_rows = 0
@@ -291,6 +299,7 @@ def main() -> None:
                     harvest_cycles(
                         day, ep.filter(pl.col("notional_usd") == base_rung), dkey, wallet,
                         args.cycle_cap, gap_ms, last_entry[dkey],
+                        args.max_edge, suspect_rows[dkey],
                     )
                 )
         del day  # 일 청크 메모리 즉시 반환
@@ -345,6 +354,19 @@ def main() -> None:
         )
         with pl.Config(tbl_rows=10):
             print(top)
+        if suspect_rows[dkey]:
+            s = pl.DataFrame(suspect_rows[dkey])
+            s_top = (
+                s.group_by("coin").agg(would_be_profit=pl.col("profit_usd").sum(), cycles=pl.len(),
+                                       max_edge_pct=(pl.col("edge").max() * 100))
+                .sort("would_be_profit", descending=True).head(10)
+            )
+            print(
+                f"  🚨 요주의 — 엣지 >{args.max_edge*100:.0f}% 지속으로 집계 제외 "
+                f"(티커 충돌/전송불가 의심 = V7 검증 대상, 총 ${float(s['profit_usd'].sum()):,.0f}어치 '가짜 기회'):"
+            )
+            with pl.Config(tbl_rows=10):
+                print(s_top)
 
     if harvest_total:
         print(
