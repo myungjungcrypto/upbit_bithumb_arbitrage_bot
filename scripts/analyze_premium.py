@@ -208,6 +208,20 @@ def harvest_cycles(
     )
     flag = "deposit_ok" if direction == "in" else "withdraw_ok"
     starts = starts.filter(pl.col(flag) == True).sort("start")  # noqa: E712 — null(미확인)도 제외
+    # 해외측(바이낸스) 게이트 — IN=해외 출금 가능, OUT=해외 입금 가능 (V8).
+    # 과거 데이터 호환: 해외 상태가 '알려진 정지'인 경우만 제외 (미확인은 통과 — 수집 축적 후 강화)
+    ovs_w = wallet.filter(pl.col("dom_ex") == "binance")
+    if not ovs_w.is_empty() and not starts.is_empty():
+        starts = starts.join_asof(
+            ovs_w.select(
+                "wts", "coin",
+                pl.col("deposit_ok").alias("ovs_dep"),
+                pl.col("withdraw_ok").alias("ovs_wd"),
+            ).sort("wts"),
+            left_on="start", right_on="wts", by=["coin"], strategy="backward",
+        )
+        ovs_flag = "ovs_wd" if direction == "in" else "ovs_dep"
+        starts = starts.filter(pl.col(ovs_flag).is_null() | (pl.col(ovs_flag) == True)).sort("start")  # noqa: E712
 
     rows: list[dict] = []
     for r in starts.iter_rows(named=True):

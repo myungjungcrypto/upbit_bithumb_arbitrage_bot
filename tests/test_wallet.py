@@ -22,6 +22,28 @@ def test_parse_upbit_wallet_status():
     assert len(rows) == 5
 
 
+def test_parse_binance_capital_config():
+    from kimp.collectors.wallet_binance import parse_capital_config, sign_query
+
+    data = [
+        {"coin": "BTC", "networkList": [
+            {"network": "BTC", "depositEnable": True, "withdrawEnable": True},
+            {"network": "BEP20", "depositEnable": False, "withdrawEnable": False},
+        ]},
+        {"coin": "wal", "networkList": [{"network": "SUI", "depositEnable": False, "withdrawEnable": True}]},
+        {"coin": "BAD", "networkList": []},   # 무시
+        {"coin": None, "networkList": [{}]},  # 무시
+    ]
+    rows = dict((c, (d, w)) for c, d, w in parse_capital_config(data))
+    assert rows["BTC"] == (True, True)     # 한 네트워크라도 열려 있으면 가능
+    assert rows["WAL"] == (False, True)    # 입금 전면 정지 감지 (V8의 핵심 케이스)
+    assert len(rows) == 2
+
+    qs = sign_query("sec", {"timestamp": 1000, "recvWindow": 10000})
+    assert qs.startswith("timestamp=1000&recvWindow=10000&signature=")
+    assert len(qs.rsplit("=", 1)[1]) == 64  # hex sha256
+
+
 def test_make_jwt_shape():
     tok = make_jwt("ak", "sk")
     parts = tok.split(".")

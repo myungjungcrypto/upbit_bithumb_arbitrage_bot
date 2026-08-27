@@ -13,6 +13,7 @@ from .collectors.bybit import BybitCollector
 from .collectors.fx import FxCollector
 from .collectors.okx import OkxCollector
 from .collectors.upbit import UpbitCollector
+from .collectors.wallet_binance import BinanceWalletStatusCollector
 from .collectors.wallet_bithumb import BithumbWalletStatusCollector
 from .collectors.wallet_upbit import UpbitWalletStatusCollector
 from .config import Config
@@ -152,15 +153,22 @@ async def run(cfg: Config) -> None:
                     if net is None or net < edge_thr:
                         continue
                     coin, dom_ex = r["coin"], r["dom_ex"]
-                    # T4 게이트: IN은 국내 입금 가능, OUT은 국내 출금 가능이 전제
+                    # T4 게이트: IN = 해외 출금 가능 ∧ 국내 입금 가능 / OUT = 국내 출금 가능 ∧ 해외 입금 가능
                     ws = wallet_state.get((dom_ex, coin))
+                    ovs_ws = wallet_state.get((r["ovs_ex"], coin))
                     blocked = None
                     if ws is not None:
                         dep_ok, wd_ok = ws
                         if direction == "in" and not dep_ok:
-                            blocked = "입금 정지"
+                            blocked = f"{dom_ex} 입금 정지"
                         elif direction == "out" and not wd_ok:
-                            blocked = "출금 정지"
+                            blocked = f"{dom_ex} 출금 정지"
+                    if blocked is None and ovs_ws is not None:
+                        ovs_dep, ovs_wd = ovs_ws
+                        if direction == "in" and not ovs_wd:
+                            blocked = f"{r['ovs_ex']} 출금 정지"
+                        elif direction == "out" and not ovs_dep:
+                            blocked = f"{r['ovs_ex']} 입금 정지"
                     cap = r.get(f"{direction}_capacity_usd")
                     cap_txt = f", capacity ~${cap:,.0f}" if cap else ""
                     body = (
@@ -172,7 +180,7 @@ async def run(cfg: Config) -> None:
                         alerter.alert(
                             WARN,
                             f"trap:{coin}:{direction}:{dom_ex}",
-                            f"함정 — {dom_ex} {coin} {blocked} 중인데 {direction.upper()} 엣지 "
+                            f"함정 — {coin} {blocked} 중인데 {direction.upper()} 엣지 "
                             f"{net*100:.1f}%. 먹을 수 없는 김프 (T4-①)",
                             cooldown=health_cd,
                         )
@@ -313,6 +321,16 @@ async def run(cfg: Config) -> None:
         log.info("upbit wallet status: ON (조회 전용 키 감지)")
     else:
         log.info("upbit wallet status: OFF (UPBIT_ACCESS_KEY/SECRET_KEY 미설정 — 함정 판정은 빗썸만)")
+    if cfg.binance_api_key and cfg.binance_api_secret:
+        wallet_collectors.append(
+            BinanceWalletStatusCollector(
+                bus, cfg.binance_api_key, cfg.binance_api_secret,
+                float(wcfg.get("binance_poll_sec", 60)),
+            )
+        )
+        log.info("binance wallet status: ON (V8 사각 해소 — 해외측 게이트 활성)")
+    else:
+        log.info("binance wallet status: OFF (BINANCE_API_KEY/SECRET 미설정 — V8 사각 존재)")
 
     tasks = [
         *(asyncio.create_task(c.run(stop), name=f"collector.{c.name}") for c in collectors),

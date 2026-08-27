@@ -76,6 +76,14 @@ class Config:
         return os.environ.get("UPBIT_SECRET_KEY", "")
 
     @property
+    def binance_api_key(self) -> str:
+        return os.environ.get("BINANCE_API_KEY", "")
+
+    @property
+    def binance_api_secret(self) -> str:
+        return os.environ.get("BINANCE_API_SECRET", "")
+
+    @property
     def telegram_token(self) -> str:
         return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
