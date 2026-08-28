@@ -12,8 +12,9 @@
   UNKNOWN       — 매핑 실패 → 보수적으로 blocklist 권고
   NO_NET_OVERLAP— 동일 자산이나 전송 네트워크 불일치 → blocklist 대상
 
-사용 (서버, ~2분 소요 — CoinGecko 무료 티어 레이트리밋 준수):
+사용 (서버, 첫 실행 ~5-10분 — CoinGecko 무료 티어 분당 ~5회 준수, 이후 24h 캐시로 즉시):
   sudo -u kimp bash -c 'set -a; . /opt/kimp/env; set +a; cd /opt/kimp/app && /opt/kimp/venv/bin/python scripts/verify_universe.py'
+선택: COINGECKO_API_KEY 환경변수(무료 데모 키)를 넣으면 분당 30회로 빨라짐.
 """
 from __future__ import annotations
 
@@ -21,7 +22,9 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
+from pathlib import Path
 
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 CG = "https://api.coingecko.com/api/v3"
@@ -37,14 +40,38 @@ NET_ALIAS = {
 }
 
 
-def get(url: str, headers: dict | None = None):
-    req = urllib.request.Request(url, headers={**UA, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read())
+def get(url: str, headers: dict | None = None, retries: int = 6):
+    """429는 Retry-After(기본 60초) 대기 후 재시도 — 무료 티어에서 중단 대신 완주."""
+    h = {**UA, **(headers or {})}
+    key = os.environ.get("COINGECKO_API_KEY", "")
+    if key and "coingecko" in url:
+        h["x-cg-demo-api-key"] = key
+    for i in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=h)
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and i < retries - 1:
+                wait = int(e.headers.get("Retry-After") or 0) or 60
+                print(f"  (레이트리밋 — {wait}초 대기 후 재시도 {i+1}/{retries-1})", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("rate limit persists")
 
 
 def cg_exchange_map(exchange_id: str, target: str, max_pages: int = 25) -> dict[str, set[str]]:
-    """CoinGecko 거래소 티커 → {베이스티커: {coingecko_id, ...}}. 페이지당 3초 대기 (무료 티어)."""
+    """CoinGecko 거래소 티커 → {베이스티커: {coingecko_id, ...}}.
+
+    무료 티어(분당 ~5회) 준수: 페이지당 10초 + 429 백오프. 결과는 24시간 파일 캐시
+    (data/cg_cache_*.json) — 재실행·부분 실패 시 재수집 비용 제거."""
+    cache = Path("data") / f"cg_cache_{exchange_id}_{target}.json"
+    if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+        raw = json.loads(cache.read_text())
+        print(f"  [{exchange_id}] 캐시 사용 ({len(raw)} 심볼, {cache})", file=sys.stderr)
+        return {k: set(v) for k, v in raw.items()}
+
     out: dict[str, set[str]] = {}
     for page in range(1, max_pages + 1):
         try:
@@ -59,7 +86,10 @@ def cg_exchange_map(exchange_id: str, target: str, max_pages: int = 25) -> dict[
             if t.get("target") == target:
                 out.setdefault(str(t.get("base", "")).upper(), set()).add(t.get("coin_id", ""))
         print(f"  [{exchange_id}] page {page}: 누적 {len(out)} 심볼", file=sys.stderr)
-        time.sleep(3)
+        time.sleep(10)
+    if out:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({k: sorted(v) for k, v in out.items()}))
     return out
 
 
