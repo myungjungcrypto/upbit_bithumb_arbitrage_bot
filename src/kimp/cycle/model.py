@@ -15,6 +15,7 @@ IN_FLIGHT = "IN_FLIGHT"        # 전송 중 (페이퍼: 코인별 예상 전송�
 ARRIVED = "ARRIVED"            # 입금 크레딧 — 매도 실행 시점
 SETTLED = "SETTLED"
 SETTLED_STUCK = "SETTLED_STUCK"  # 도착 시 유동성 소진 반복 → 강제 정산 (WARN)
+VOID = "VOID"                    # 소급 무효 (예: trade_blocklist 등재) — 손익 미집계
 
 OPEN_STATES = (SIGNAL, ENTERED, IN_FLIGHT, ARRIVED)
 

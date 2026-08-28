@@ -196,6 +196,30 @@ def test_paper_resume_reloads_open_cycles(tmp_path):
     asyncio.run(go())
 
 
+def test_paper_blocklist_blocks_entry_and_voids_open(tmp_path):
+    eng, books, ledger = _mk_engine(tmp_path)
+    _feed(books)
+    async def go():
+        eng.wallet_state[("upbit", "XRP")] = (True, True)
+        eng.consider(_row(in_net=0.01))
+        assert len(eng.store.load_open()) == 1
+        # XRP가 소급으로 blocklist 등재 → 재기동 시 무효 처리
+        eng2, _, _ = _mk_engine(tmp_path)
+        eng2.store = eng.store
+        eng2.ledger = eng.ledger
+        eng2.blocklist = {"XRP"}
+        assert eng2.resume() == 0                              # 이어가는 사이클 0
+        assert eng.store.load_open() == []                     # VOID로 종결
+        assert ledger[-1]["state"] == "VOID" and ledger[-1]["pnl_usd"] == 0.0
+        # 신규 진입도 차단
+        eng2.wallet_state[("upbit", "XRP")] = (True, True)
+        eng2.consider(_row(in_net=0.01))
+        assert eng2.risk.open_notional == {}
+        for t in list(eng._tasks) + list(eng2._tasks):
+            t.cancel()
+    asyncio.run(go())
+
+
 def test_paper_max_edge_and_threshold(tmp_path):
     eng, books, _ = _mk_engine(tmp_path)
     _feed(books)

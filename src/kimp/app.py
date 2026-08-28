@@ -129,6 +129,7 @@ async def run(cfg: Config) -> None:
             writers["fx"].add(fx_row(f))
 
     edge_thr = float(cfg.alerts.get("net_edge_threshold", 0.005))
+    trade_blocklist = {s.upper() for s in cfg.raw.get("universe", {}).get("trade_blocklist", [])}
     # 거래소별 최신 입출금 상태 캐시 — T4 게이트 ①의 판단용 (P0는 빗썸만, 업비트/해외는 P0.5)
     wallet_state: dict[tuple[str, str], tuple[bool, bool]] = {}
 
@@ -164,6 +165,13 @@ async def run(cfg: Config) -> None:
                     if net is None or net < edge_thr:
                         continue
                     coin, dom_ex = r["coin"], r["dom_ex"]
+                    if coin in trade_blocklist:
+                        alerter.alert(
+                            WARN, f"blocklist:{coin}",
+                            f"{coin} 엣지 {net*100:.1f}% 관측 — V7 미검증 심볼이라 거래 차단 중 (동일성 확인 시 해제)",
+                            cooldown=6 * 3600,
+                        )
+                        continue
                     # T4 게이트: IN = 해외 출금 가능 ∧ 국내 입금 가능 / OUT = 국내 출금 가능 ∧ 해외 입금 가능
                     ws = wallet_state.get((dom_ex, coin))
                     ovs_ws = wallet_state.get((r["ovs_ex"], coin))

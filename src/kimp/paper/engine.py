@@ -21,7 +21,7 @@ from decimal import Decimal
 from ..alerts.telegram import CRIT, INFO, WARN, Alerter
 from ..bus import Bus
 from ..config import Config
-from ..cycle.model import ARRIVED, ENTERED, IN_FLIGHT, SETTLED, SETTLED_STUCK, Cycle
+from ..cycle.model import ARRIVED, ENTERED, IN_FLIGHT, SETTLED, SETTLED_STUCK, VOID, Cycle
 from ..cycle.risk import RiskManager
 from ..cycle.store import CycleStore
 from ..engine.books import BookStore
@@ -57,6 +57,8 @@ class PaperEngine:
         self.max_edge = float(p.get("max_edge", 0.05))
         self.hedge_out = bool(p.get("hedge_out", True))
         self.transfer_min = p.get("transfer_minutes", {}) or {}
+        # V7 미검증 심볼 — 자산 동일성 확인 전까지 거래 금지 (수집·관측은 계속)
+        self.blocklist: set[str] = {s.upper() for s in cfg.raw.get("universe", {}).get("trade_blocklist", [])}
         self._open_keys: set[tuple] = set()  # (coin, dom_ex, kind) — 같은 기회 중복 진입 방지
         self._tasks: set[asyncio.Task] = set()
 
@@ -96,6 +98,8 @@ class PaperEngine:
         if not self.enabled:
             return
         coin, dom_ex, ovs_ex = row["coin"], row["dom_ex"], row["ovs_ex"]
+        if coin in self.blocklist:
+            return  # V7 미검증 — 엣지가 아무리 좋아도 거래 금지
         for kind in ("in", "out"):
             net = row.get(f"{kind}_net")
             if net is None or net < self.entry_thr:
@@ -242,13 +246,29 @@ class PaperEngine:
     # ---------- 루프·복구 ----------
 
     def resume(self) -> int:
-        """재기동 시 열린 사이클 이어가기 (T6) — 도착 타이머 재장전."""
-        open_cycles = self.store.load_open()
-        for c in open_cycles:
+        """재기동 시 열린 사이클 이어가기 (T6) — 도착 타이머 재장전.
+        blocklist에 소급 등재된 코인의 사이클은 무효 처리 (손익 미집계 — 오염 방지)."""
+        n = 0
+        for c in self.store.load_open():
+            if c.coin in self.blocklist:
+                c.pnl_usd = 0.0
+                c.note = "trade_blocklist 소급 무효 (V7 미검증 심볼)"
+                c.stamp(VOID)
+                self.store.save(c)
+                self.ledger.add(
+                    {"ts": now_ms(), "cycle_id": c.id, "kind": c.kind, "coin": c.coin,
+                     "dom_ex": c.dom_ex, "ovs_ex": c.ovs_ex, "hedged": c.hedged,
+                     "notional_usd": float(c.notional_usd), "entry_edge": c.entry_edge,
+                     "pnl_usd": 0.0, "state": VOID, "stamps": str(c.stamps), "note": c.note}
+                )
+                self.alerter.alert(WARN, f"paper:void:{c.id}",
+                                   f"[PAPER] {c.coin} {c.kind.upper()} 사이클 무효 처리 — {c.note}", cooldown=0)
+                continue
             self.risk.on_entry(c.id, c.coin, c.notional_usd)
             self._open_keys.add((c.coin, c.dom_ex, c.kind))
             self._spawn_arrival(c)
-        return len(open_cycles)
+            n += 1
+        return n
 
     async def run(self, stop: asyncio.Event) -> None:
         if not self.enabled:
