@@ -29,14 +29,24 @@ from pathlib import Path
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 CG = "https://api.coingecko.com/api/v3"
 
-# 네트워크 명칭 정규화 (업비트 net_type ↔ 바이낸스 network)
+# 네트워크 명칭 정규화 (업비트 net_type ↔ 바이낸스 network).
+# 2026-08-28 실측 반영: 같은 체인의 거래소별 표기 차이는 합치되,
+# 체인 마이그레이션·주소체계 차이(NEO/NEO3, CHZ/CHZ2, A/EOS, SEI/SEIEVM, MTL/METAL,
+# LISK/ETH, ZIL/BSC 등)는 **의도적으로 합치지 않음** — 실제 전송 불가 위험이라 차단 유지.
 NET_ALIAS = {
     "ERC20": "ETH", "ETHEREUM": "ETH",
     "BEP20": "BSC", "BEP20(BSC)": "BSC", "BNB SMART CHAIN": "BSC", "BNB SMART CHAIN(BEP20)": "BSC",
     "TRC20": "TRX", "TRON": "TRX",
     "SOLANA": "SOL", "SPL": "SOL",
-    "POLYGON": "MATIC", "POLYGON POS": "MATIC",
+    "POLYGON": "MATIC", "POLYGON POS": "MATIC", "POL": "MATIC",
     "ARBITRUM ONE": "ARBITRUM", "ARB": "ARBITRUM",
+    "BASENET": "BASE",           # 업비트 표기 → Base
+    "LINEANET": "LINEA",
+    "ZKSYNCERA": "ZKSYNC",       # zkSync Era 표기 통일
+    "WAXP": "WAX",
+    "AVAXC": "AVAX", "AVAX C-CHAIN": "AVAX",
+    "XPL": "PLASMA",
+    "OPTIMISM": "OP",
 }
 
 
