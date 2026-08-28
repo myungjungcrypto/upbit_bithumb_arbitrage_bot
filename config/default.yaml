@@ -74,3 +74,25 @@ fx:
 
 telegram:
   enabled: true              # 토큰/챗ID는 환경변수 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+
+# P2 페이퍼 트레이딩 — 주문·출금 없이 전체 사이클 시뮬레이션 (실제 자금 무관, API 키 불필요)
+paper:
+  enabled: true
+  entry_threshold: 0.005     # 순엣지 0.5% 이상이면 진입
+  max_edge: 0.05             # 초과분은 V7/V8 의심 — 진입 금지
+  hedge_out: true            # OUT(역프)은 헤지 락 (§1.2 확정)
+  transfer_minutes:          # 코인별 예상 전송시간 (P3에서 실측 분포로 대체)
+    default: 15
+    XRP: 4
+    TRX: 4
+    SOL: 4
+    DOGE: 25
+    BTC: 40
+    ETH: 12
+  risk:                      # T13 확정 수치 (운용자 승인 2026-08-28)
+    cycle_cap_usd: 2000
+    inflight_cap_usd: 6000
+    per_coin_cap_usd: 3000
+    hourly_entries: 10
+    daily_loss_limit_usd: 300
+    max_consecutive_failures: 3

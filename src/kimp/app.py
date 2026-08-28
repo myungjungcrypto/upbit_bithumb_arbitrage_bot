@@ -1,9 +1,10 @@
-"""P0 앱 배선 — 수집기 → 버스 → 엔진/저장/알림, 시그널 종료 처리."""
+"""앱 배선 — 수집기 → 버스 → 엔진/저장/알림 + P2 페이퍼 트레이딩, 시그널 종료 처리."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import signal
+from pathlib import Path
 
 from .alerts.telegram import CRIT, INFO, WARN, Alerter
 from .bus import Bus
@@ -17,8 +18,11 @@ from .collectors.wallet_binance import BinanceWalletStatusCollector
 from .collectors.wallet_bithumb import BithumbWalletStatusCollector
 from .collectors.wallet_upbit import UpbitWalletStatusCollector
 from .config import Config
+from .cycle.risk import RiskManager
+from .cycle.store import CycleStore
 from .engine.books import BookStore
 from .engine.runner import PremiumEngine
+from .paper.engine import PaperEngine
 from .storage.parquet import (
     BufferedParquetWriter,
     book_row,
@@ -60,7 +64,7 @@ async def run(cfg: Config) -> None:
     flush_sec = float(st.get("flush_sec", 30))
     writers = {
         name: BufferedParquetWriter(root, name, flush_rows, flush_sec)
-        for name in ("books", "trades", "fx", "premium", "health", "wallet")
+        for name in ("books", "trades", "fx", "premium", "health", "wallet", "paper_cycles")
     }
 
     alerter = Alerter(
@@ -127,6 +131,13 @@ async def run(cfg: Config) -> None:
     edge_thr = float(cfg.alerts.get("net_edge_threshold", 0.005))
     # 거래소별 최신 입출금 상태 캐시 — T4 게이트 ①의 판단용 (P0는 빗썸만, 업비트/해외는 P0.5)
     wallet_state: dict[tuple[str, str], tuple[bool, bool]] = {}
+
+    # --- P2 페이퍼 트레이딩 (T13 확정 한도로 전체 사이클 시뮬레이션) ---
+    paper_cfg = cfg.raw.get("paper", {})
+    risk = RiskManager(paper_cfg.get("risk", {}))
+    cycle_store = CycleStore(Path(root) / "cycles.db")
+    paper = PaperEngine(bus, store, cycle_store, risk, alerter, wallet_state, cfg, writers["paper_cycles"])
+    log.info("paper trading: %s", "ON" if paper.enabled else "OFF")
 
     prem_min_change = float(st.get("premium_min_change", 0.0005))
     prem_heartbeat_ms = int(st.get("premium_heartbeat_ms", 10000))
@@ -284,10 +295,17 @@ async def run(cfg: Config) -> None:
             except asyncio.TimeoutError:
                 pass
             counts = {c.name: c.msg_count for c in collectors}
-            log.info("status: msgs=%s dropped=%s rss=%.0fMB", counts, dict(bus.dropped), _rss_mb())
+            open_n = len(risk.open_notional)
+            log.info(
+                "status: msgs=%s dropped=%s rss=%.0fMB paper(open=%d, today=$%.2f%s)",
+                counts, dict(bus.dropped), _rss_mb(), open_n, risk.daily_pnl,
+                f", L1:{risk.halted}" if risk.halted else "",
+            )
             alerter.alert(
                 INFO, "heartbeat",
-                f"수집 정상 — 메시지 수신 {counts}, RSS {_rss_mb():.0f}MB", cooldown=3600,
+                f"수집 정상 — RSS {_rss_mb():.0f}MB · PAPER: 진행 {open_n}건, 오늘 ${risk.daily_pnl:,.2f}"
+                + (f" · ⚠️L1: {risk.halted}" if risk.halted else ""),
+                cooldown=3600,
             )
 
     # --- 수집기 기동 ---
@@ -348,6 +366,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(consume_wallet(), name="consume.wallet"),
         asyncio.create_task(status_reporter(), name="status"),
         asyncio.create_task(retention_janitor(), name="retention"),
+        asyncio.create_task(paper.run(stop), name="paper"),
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
         asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),
