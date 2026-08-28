@@ -41,6 +41,14 @@ fees:
     bybit: 0.001
     okx: 0.001
 
+# 정률 출금 수수료 — OUT 사이클의 국내 코인 출금에 가산 (운용자 실측 2026-08-28: 빗썸 알트 다수 ~1%)
+# 효과: 빗썸 OUT은 총엣지 ~1.5%+ 떠야 순엣지 0.5% 임계 통과. 코인별 실값 확인 시 override (VERIFY)
+withdraw_fee_pct:
+  bithumb:
+    default: 0.01
+  upbit:
+    default: 0.0             # 업비트는 정액 위주 — 코인별 실값 확인 후 갱신
+
 # 출금 수수료 플랫 추정 (USD 환산). 네트워크·거래소별 상이 → VERIFY 후 갱신
 withdraw_fee_usd_est:
   default: 2.0

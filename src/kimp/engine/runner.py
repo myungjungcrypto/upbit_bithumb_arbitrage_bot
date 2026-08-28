@@ -95,6 +95,8 @@ class PremiumEngine:
             # 왕복 3-레그: 해외 1회 + 국내 2회 (코인 레그 + USDT 복귀 레그)
             fee_total = fee_ovs + fee_dom * 2
             wd_cost_usd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
+            # OUT은 국내 코인 출금에 정률 수수료 추가 (빗썸 알트 ~1% — 운용자 실측)
+            out_wd_pct = self.cfg.withdraw_fee_pct(dom_ex, coin)
 
             # capacity: 임계 순엣지를 유지하는 최대 명목 (§1.4 사이징 자동화)
             thr = self._edge_threshold
@@ -108,7 +110,7 @@ class PremiumEngine:
                 if usdt_mid_now is None or usdt_mid_now <= 0:
                     return None
                 g = outbound_gross_edge(dom, ovs, usdt, n_usd * usdt_mid_now)
-                return None if g is None else g - fee_total - wd_cost_usd / n_usd
+                return None if g is None else g - fee_total - out_wd_pct - wd_cost_usd / n_usd
 
             in_cap = capacity_at_threshold(in_net, thr)
             out_cap = capacity_at_threshold(out_net, thr)
@@ -134,7 +136,7 @@ class PremiumEngine:
                         "in_gross": _f(in_gross),
                         "in_net": _f(in_gross - fee_total - wd_ratio) if in_gross is not None else None,
                         "out_gross": _f(out_gross),
-                        "out_net": _f(out_gross - fee_total - wd_ratio) if out_gross is not None else None,
+                        "out_net": _f(out_gross - fee_total - out_wd_pct - wd_ratio) if out_gross is not None else None,
                         "dom_ts_lag_ms": ts - dom.ts_local,
                         "ovs_ts_lag_ms": ts - ovs.ts_local,
                         "in_capacity_usd": _f(in_cap),

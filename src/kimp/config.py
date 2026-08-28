@@ -55,6 +55,12 @@ class Config:
         table = self.raw.get("withdraw_fee_usd_est", {})
         return D(table.get(coin, table.get("default", 2.0)))
 
+    def withdraw_fee_pct(self, exchange: str, coin: str) -> Decimal:
+        """정률 출금 수수료 (운용자 실측 2026-08-28: 빗썸 알트 다수 ~명목의 1%).
+        OUT 사이클의 국내 코인 출금에 적용 — 정액 모델만으로는 빗썸 비용을 크게 과소평가."""
+        table = self.raw.get("withdraw_fee_pct", {}).get(exchange, {})
+        return D(table.get(coin, table.get("default", 0)))
+
     @property
     def alerts(self) -> dict:
         return self.raw.get("alerts", {})

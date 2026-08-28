@@ -220,6 +220,16 @@ def test_paper_blocklist_blocks_entry_and_voids_open(tmp_path):
     asyncio.run(go())
 
 
+def test_out_withdraw_pct_fee_applied(tmp_path):
+    """빗썸류 정률 출금비 — OUT에만 가산 (운용자 실측: 알트 ~1% → 총엣지 1.5%+ 필요)."""
+    eng, _, _ = _mk_engine(tmp_path)
+    eng.cfg.raw["withdraw_fee_pct"] = {"upbit": {"default": 0.01}}
+    n = D(2000)
+    fee_in = eng._fees("in", "XRP", "upbit", n)
+    fee_out = eng._fees("out", "XRP", "upbit", n)
+    assert fee_out - fee_in == n * D("0.01")   # $20 차이
+
+
 def test_paper_max_edge_and_threshold(tmp_path):
     eng, books, _ = _mk_engine(tmp_path)
     _feed(books)

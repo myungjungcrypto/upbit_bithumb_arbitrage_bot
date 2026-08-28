@@ -86,9 +86,11 @@ class PaperEngine:
     def _transfer_sec(self, coin: str) -> float:
         return float(self.transfer_min.get(coin, self.transfer_min.get("default", 15))) * 60
 
-    def _fees(self, coin: str, dom_ex: str, notional: Decimal) -> Decimal:
+    def _fees(self, kind: str, coin: str, dom_ex: str, notional: Decimal) -> Decimal:
         fee_ratio = self.cfg.taker_fee(self.cfg.overseas_ref) + self.cfg.taker_fee(dom_ex) * 2
         wd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
+        if kind == "out":  # 국내 코인 출금 정률 수수료 (빗썸 알트 ~1% — 운용자 실측 2026-08-28)
+            wd += notional * self.cfg.withdraw_fee_pct(dom_ex, coin)
         return notional * fee_ratio + wd
 
     # ---------- 진입 ----------
@@ -178,7 +180,7 @@ class PaperEngine:
             if self._try_settle(c):
                 return
             await asyncio.sleep(60)  # 도착 시 호가 스테일/깊이 부족 → 재시도 (T4 플레이북: 투매 금지)
-        self._finalize(c, pnl=-float(self._fees(c.coin, c.dom_ex, c.notional_usd)),
+        self._finalize(c, pnl=-float(self._fees(c.kind, c.coin, c.dom_ex, c.notional_usd)),
                        state=SETTLED_STUCK, note="도착 후 6회 재시도에도 정산 불가 — 수수료만 손실 처리")
 
     def _try_settle(self, c: Cycle) -> bool:
@@ -209,7 +211,7 @@ class PaperEngine:
                     return False
                 usdt_got, _ = s
                 gross = usdt_got - c.notional_usd
-        pnl = float(gross - self._fees(c.coin, c.dom_ex, c.notional_usd))
+        pnl = float(gross - self._fees(c.kind, c.coin, c.dom_ex, c.notional_usd))
         c.stamp(ARRIVED)
         self._finalize(c, pnl=pnl, state=SETTLED)
         return True
