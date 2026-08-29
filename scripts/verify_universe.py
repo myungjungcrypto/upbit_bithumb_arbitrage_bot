@@ -125,6 +125,28 @@ def upbit_networks() -> dict[str, set[str]]:
     return out
 
 
+def bithumb_networks() -> dict[str, set[str]]:
+    """빗썸 코인별 네트워크 (신 API v1/status/wallet, 조회 전용 키) — 키 없으면 빈 dict."""
+    ak, sk = os.environ.get("BITHUMB_API_KEY", ""), os.environ.get("BITHUMB_API_SECRET", "")
+    if not (ak and sk):
+        return {}
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    from kimp.collectors.wallet_bithumb import make_bithumb_jwt
+
+    try:
+        data = get("https://api.bithumb.com/v1/status/wallet",
+                   {"Authorization": f"Bearer {make_bithumb_jwt(ak, sk)}"})
+    except Exception as e:
+        print(f"  (경고: 빗썸 v1 지갑 조회 실패 {e!r} — 빗썸 레그 네트워크 검사 생략)", file=sys.stderr)
+        return {}
+    out: dict[str, set[str]] = {}
+    for row in data if isinstance(data, list) else []:
+        cur, net = row.get("currency"), row.get("net_type")
+        if cur and net:
+            out.setdefault(cur.upper(), set()).add(norm_net(net))
+    return out
+
+
 def binance_networks() -> dict[str, set[str]]:
     """바이낸스 코인별 출금 가능 네트워크 — 조회 전용 키 필요, 없으면 빈 dict."""
     ak, sk = os.environ.get("BINANCE_API_KEY", ""), os.environ.get("BINANCE_API_SECRET", "")
@@ -149,34 +171,49 @@ def main() -> None:
     up = cg_exchange_map("upbit", "KRW")
     bn = cg_exchange_map("binance", "USDT")
     print("2/3 네트워크 정보 수집 중 (키 있으면)...", file=sys.stderr)
-    up_nets, bn_nets = upbit_networks(), binance_networks()
-    net_check = bool(up_nets and bn_nets)
+    up_nets, bt_nets, bn_nets = upbit_networks(), bithumb_networks(), binance_networks()
 
     coins = sorted(set(up) & set(bn))
-    print(f"3/3 판정 — 교집합 {len(coins)}개 심볼 (네트워크 검사: {'ON' if net_check else 'OFF — 키 없음'})\n",
-          file=sys.stderr)
+    print(
+        f"3/3 판정 — 교집합 {len(coins)}개 심볼 "
+        f"(네트워크 검사: 업비트 {'ON' if up_nets and bn_nets else 'OFF'} / 빗썸 {'ON' if bt_nets and bn_nets else 'OFF'})\n",
+        file=sys.stderr,
+    )
 
     blocklist: list[str] = []
+    ok_coins: list[str] = []
     print(f"{'코인':8} {'판정':16} 상세")
     for c in coins:
         u_ids, b_ids = up[c] - {""}, bn[c] - {""}
         if not u_ids or not b_ids:
-            verdict, detail = "UNKNOWN", f"매핑 실패 (upbit={u_ids or '-'}, binance={b_ids or '-'})"
+            print(f"{c:8} {'UNKNOWN':16} 매핑 실패 (upbit={u_ids or '-'}, binance={b_ids or '-'})")
             blocklist.append(c)
-        elif u_ids & b_ids:
-            if net_check and c in up_nets and c in bn_nets and not (up_nets[c] & bn_nets[c]):
-                verdict, detail = "NO_NET_OVERLAP", f"동일 자산이나 네트워크 불일치 (upbit={sorted(up_nets[c])}, binance={sorted(bn_nets[c])})"
-                blocklist.append(c)
-            else:
-                verdict, detail = "OK", f"id={sorted(u_ids & b_ids)[0]}"
+            continue
+        if not (u_ids & b_ids):
+            print(f"{c:8} {'MISMATCH':16} 충돌! upbit={sorted(u_ids)} vs binance={sorted(b_ids)}")
+            blocklist.append(c)
+            continue
+        # 자산 동일 — 국내 레그별 네트워크 겹침 검사 (검사 불가 레그는 통과로 두되 표기)
+        leg_blocks = []
+        for dom, nets in (("upbit", up_nets), ("bithumb", bt_nets)):
+            if nets and bn_nets and c in nets and c in bn_nets and not (nets[c] & bn_nets[c]):
+                leg_blocks.append(dom)
+                print(f"{c:8} {'NO_NET_OVERLAP':16} {dom} 레그 — {dom}={sorted(nets[c])} vs binance={sorted(bn_nets[c])}")
+        if len(leg_blocks) >= 2:
+            blocklist.append(c)               # 양쪽 다 막힘 → 전역 차단
         else:
-            verdict, detail = "MISMATCH", f"충돌! upbit={sorted(u_ids)} vs binance={sorted(b_ids)}"
-            blocklist.append(c)
-        if verdict != "OK":
-            print(f"{c:8} {verdict:16} {detail}")
-    print(f"\nOK {len(coins) - len(blocklist)} / 차단 권고 {len(blocklist)}")
+            blocklist.extend(f"{c}@{d}" for d in leg_blocks)  # 한쪽만 → 레그 차단
+            ok_coins.append(c)                # 최소 한 레그는 거래 가능 → allowlist 포함
+
+    print(f"\nOK {len(ok_coins)} / 차단 권고 {len(blocklist)} (전역+레그)")
     print("\nconfig/default.yaml에 반영할 값:")
     print(f"  trade_blocklist: [{', '.join(sorted(blocklist))}]")
+
+    # allowlist 파일 — 페이퍼/실행 엔진이 자동 사용: 여기 없는 코인(=미검증·신규 상장)은 거래 차단
+    out_path = Path("data") / "verified_ok.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps({"generated_ms": int(time.time() * 1000), "ok": sorted(ok_coins)}))
+    print(f"\nallowlist 저장: {out_path} ({len(ok_coins)}종) — 재시작 시 엔진이 자동 적용, 신규 상장은 재실행 전까지 차단")
 
 
 if __name__ == "__main__":

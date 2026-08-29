@@ -220,6 +220,30 @@ def test_paper_blocklist_blocks_entry_and_voids_open(tmp_path):
     asyncio.run(go())
 
 
+def test_paper_leg_blocklist_and_allowlist(tmp_path):
+    eng, books, _ = _mk_engine(tmp_path)
+    _feed(books)
+    async def go():
+        eng.wallet_state[("upbit", "XRP")] = (True, True)
+        eng.wallet_state[("binance", "XRP")] = (True, True)
+        # 레그 차단: XRP@upbit → upbit 레그 진입 금지
+        eng.blocklist = {"XRP@UPBIT".upper()}
+        eng.consider(_row(in_net=0.01))
+        assert eng.risk.open_notional == {}
+        # allowlist 모드: XRP 미포함이면 차단
+        eng.blocklist = set()
+        eng.verified_ok = {"BTC"}
+        eng.consider(_row(in_net=0.01))
+        assert eng.risk.open_notional == {}
+        # allowlist에 있으면 진입
+        eng.verified_ok = {"XRP"}
+        eng.consider(_row(in_net=0.01))
+        assert len(eng.risk.open_notional) == 1
+        for t in list(eng._tasks):
+            t.cancel()
+    asyncio.run(go())
+
+
 def test_out_withdraw_pct_fee_applied(tmp_path):
     """빗썸류 정률 출금비 — OUT에만 가산 (운용자 실측: 알트 ~1% → 총엣지 1.5%+ 필요)."""
     eng, _, _ = _mk_engine(tmp_path)

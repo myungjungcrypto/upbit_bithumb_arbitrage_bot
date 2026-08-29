@@ -40,10 +40,13 @@ def make_jwt(access_key: str, secret_key: str) -> str:
 
 
 def parse_wallet_status(data: list) -> list[tuple[str, bool, bool]]:
-    """응답 → [(코인, 입금가능, 출금가능)]. 미지의 상태는 보수적으로 정지 취급 (순수 함수, 테스트 대상)."""
-    out: list[tuple[str, bool, bool]] = []
+    """응답 → [(코인, 입금가능, 출금가능)]. 미지의 상태는 보수적으로 정지 취급.
+
+    멀티 네트워크 코인은 (currency, net_type)별 행이 여러 개 → 코인 단위로 OR 집계
+    (한 네트워크라도 열려 있으면 가능 — 바이낸스 수집기와 동일한 근사)."""
+    agg: dict[str, tuple[bool, bool]] = {}
     if not isinstance(data, list):
-        return out
+        return []
     for row in data:
         if not isinstance(row, dict):
             continue
@@ -53,8 +56,9 @@ def parse_wallet_status(data: list) -> list[tuple[str, bool, bool]]:
             continue
         dep = state in ("working", "deposit_only")
         wd = state in ("working", "withdraw_only")
-        out.append((coin.upper(), dep, wd))
-    return out
+        p = agg.get(coin.upper(), (False, False))
+        agg[coin.upper()] = (p[0] or dep, p[1] or wd)
+    return [(c, d, w) for c, (d, w) in agg.items()]
 
 
 class UpbitWalletStatusCollector(WalletStatusCollector):

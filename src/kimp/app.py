@@ -165,7 +165,7 @@ async def run(cfg: Config) -> None:
                     if net is None or net < edge_thr:
                         continue
                     coin, dom_ex = r["coin"], r["dom_ex"]
-                    if coin in trade_blocklist:
+                    if coin in trade_blocklist or f"{coin}@{dom_ex}".upper() in trade_blocklist:
                         alerter.alert(
                             WARN, f"blocklist:{coin}",
                             f"{coin} 엣지 {net*100:.1f}% 관측 — V7 미검증 심볼이라 거래 차단 중 (동일성 확인 시 해제)",
@@ -335,8 +335,13 @@ async def run(cfg: Config) -> None:
     fx = FxCollector(bus, cfg.fx.get("url", ""), float(cfg.fx.get("poll_sec", 5)))
     wcfg = cfg.raw.get("wallet_status", {})
     wallet_collectors = [
-        BithumbWalletStatusCollector(bus, float(wcfg.get("bithumb_poll_sec", 60)))
+        BithumbWalletStatusCollector(
+            bus, float(wcfg.get("bithumb_poll_sec", 60)),
+            cfg.bithumb_api_key, cfg.bithumb_api_secret,
+        )
     ]
+    if cfg.bithumb_api_key:
+        log.info("bithumb wallet status: 인증 모드 (v1 — 신규상장 커버리지+네트워크, 실패 시 public 폴백)")
     if cfg.upbit_access_key and cfg.upbit_secret_key:
         wallet_collectors.append(
             UpbitWalletStatusCollector(

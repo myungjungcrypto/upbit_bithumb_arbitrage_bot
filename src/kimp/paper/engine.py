@@ -57,10 +57,34 @@ class PaperEngine:
         self.max_edge = float(p.get("max_edge", 0.05))
         self.hedge_out = bool(p.get("hedge_out", True))
         self.transfer_min = p.get("transfer_minutes", {}) or {}
-        # V7 미검증 심볼 — 자산 동일성 확인 전까지 거래 금지 (수집·관측은 계속)
+        # V7 미검증 심볼 — 자산 동일성 확인 전까지 거래 금지 (수집·관측은 계속).
+        # 항목 "COIN"=전역 차단, "COIN@bithumb"=해당 국내 레그만 차단
         self.blocklist: set[str] = {s.upper() for s in cfg.raw.get("universe", {}).get("trade_blocklist", [])}
+        # allowlist 모드: verify_universe.py가 생성한 검증 통과 목록이 있으면 그 안의 코인만 거래.
+        # 신규 상장은 verify 재실행 전까지 자동 차단 — "미검증 = 거래 불가"의 구조화
+        self.verified_ok: set[str] | None = self._load_verified(cfg)
         self._open_keys: set[tuple] = set()  # (coin, dom_ex, kind) — 같은 기회 중복 진입 방지
         self._tasks: set[asyncio.Task] = set()
+
+    @staticmethod
+    def _load_verified(cfg: Config):
+        import json
+        from pathlib import Path
+
+        path = Path(cfg.storage.get("root", "data")) / "verified_ok.json"
+        try:
+            d = json.loads(path.read_text())
+            ok = {s.upper() for s in d.get("ok", [])}
+            age_days = (now_ms() - int(d.get("generated_ms", 0))) / 86_400_000
+            log.info("verified allowlist: %d coins (생성 %.1f일 전%s)", len(ok), age_days,
+                     " — 오래됨, verify_universe 재실행 권장" if age_days > 7 else "")
+            return ok if ok else None
+        except FileNotFoundError:
+            log.info("verified allowlist 없음 — blocklist 모드로 동작 (verify_universe 실행 시 allowlist 모드 전환)")
+            return None
+        except Exception:
+            log.exception("verified_ok.json 파싱 실패 — blocklist 모드")
+            return None
 
     # ---------- 게이트 ----------
 
@@ -100,8 +124,10 @@ class PaperEngine:
         if not self.enabled:
             return
         coin, dom_ex, ovs_ex = row["coin"], row["dom_ex"], row["ovs_ex"]
-        if coin in self.blocklist:
-            return  # V7 미검증 — 엣지가 아무리 좋아도 거래 금지
+        if coin in self.blocklist or f"{coin}@{dom_ex}".upper() in self.blocklist:
+            return  # V7 미검증/레그 차단 — 엣지가 아무리 좋아도 거래 금지
+        if self.verified_ok is not None and coin not in self.verified_ok:
+            return  # allowlist 모드: 검증 통과 코인만 (신규 상장 = 자동 차단)
         for kind in ("in", "out"):
             net = row.get(f"{kind}_net")
             if net is None or net < self.entry_thr:

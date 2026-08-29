@@ -82,6 +82,14 @@ class Config:
         return os.environ.get("UPBIT_SECRET_KEY", "")
 
     @property
+    def bithumb_api_key(self) -> str:
+        return os.environ.get("BITHUMB_API_KEY", "")
+
+    @property
+    def bithumb_api_secret(self) -> str:
+        return os.environ.get("BITHUMB_API_SECRET", "")
+
+    @property
     def binance_api_key(self) -> str:
         return os.environ.get("BINANCE_API_KEY", "")
 
