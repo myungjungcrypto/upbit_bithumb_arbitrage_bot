@@ -117,7 +117,7 @@ paper:
     hourly_entries: 10
     daily_loss_limit_usd: 300
     max_consecutive_failures: 3
-  inventory:                 # §1.5 재고 선배치형 페이퍼 (M3ⓐ) — T18 확정: 거래소당 $5k, 가격 노출 감수
+  inventory:                 # §1.5 재고형 페이퍼 시뮬 — 전부 가상 (T18 재결정: 무헤지 실배치 철회, 측정만)
     enabled: true
     venues_usd: {upbit: 5000, bithumb: 5000, binance: 5000, bybit: 5000, okx: 5000}
     coins: [PROM, ONG]       # 재고를 둘 코인 (검증 레그에서만 실행됨 — verify 재실행 후 유효)
