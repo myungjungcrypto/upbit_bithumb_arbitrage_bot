@@ -249,19 +249,81 @@ def test_paper_leg_blocklist_and_allowlist(tmp_path):
         eng.wallet_state[("upbit", "XRP")] = (True, True)
         eng.wallet_state[("binance", "XRP")] = (True, True)
         # 레그 차단: XRP@upbit → upbit 레그 진입 금지
-        eng.blocklist = {"XRP@UPBIT".upper()}
+        eng.blocklist = {"XRP@UPBIT"}
         eng.consider(_row(in_net=0.01))
         assert eng.risk.open_notional == {}
-        # allowlist 모드: XRP 미포함이면 차단
+        # M2 해외 레그 차단: XRP>binance → 바낸 레그 진입 금지
+        eng.blocklist = {"XRP>BINANCE"}
+        eng.consider(_row(in_net=0.01))
+        assert eng.risk.open_notional == {}
+        # 조합 차단: XRP@upbit>binance
+        eng.blocklist = {"XRP@UPBIT>BINANCE"}
+        eng.consider(_row(in_net=0.01))
+        assert eng.risk.open_notional == {}
+        # allowlist 모드 (M2 레그 단위): XRP 미포함 → 차단
         eng.blocklist = set()
-        eng.verified_ok = {"BTC"}
+        eng.verified_ok = {"BTC": {"UPBIT>BINANCE"}}
         eng.consider(_row(in_net=0.01))
         assert eng.risk.open_notional == {}
-        # allowlist에 있으면 진입
-        eng.verified_ok = {"XRP"}
+        # 코인은 있어도 해당 레그가 미검증이면 차단 (okx만 검증된 XRP로 binance 레그 시도)
+        eng.verified_ok = {"XRP": {"UPBIT>OKX"}}
+        eng.consider(_row(in_net=0.01))
+        assert eng.risk.open_notional == {}
+        # 레그가 검증돼 있으면 진입
+        eng.verified_ok = {"XRP": {"UPBIT>BINANCE"}}
         eng.consider(_row(in_net=0.01))
         assert len(eng.risk.open_notional) == 1
         for t in list(eng._tasks):
+            t.cancel()
+    asyncio.run(go())
+
+
+def test_load_verified_legacy_format_is_binance_only(tmp_path):
+    """구 verified_ok.json(코인 목록)은 바낸 레그만 검증된 것으로 해석 — okx/bybit 레그는 차단."""
+    import json
+    from kimp.paper.engine import PaperEngine
+    root = tmp_path / "data"
+    root.mkdir()
+    (root / "verified_ok.json").write_text(json.dumps({"generated_ms": 0, "ok": ["xrp"]}))
+    legs = PaperEngine._load_verified(Config(raw={"storage": {"root": str(root)}}))
+    assert legs == {"XRP": {"UPBIT>BINANCE", "BITHUMB>BINANCE"}}
+    # M2 포맷은 그대로 (대문자 정규화)
+    (root / "verified_ok.json").write_text(json.dumps(
+        {"generated_ms": 0, "legs": {"ong": ["upbit>okx"]}, "ok": ["ong"]}))
+    legs2 = PaperEngine._load_verified(Config(raw={"storage": {"root": str(root)}}))
+    assert legs2 == {"ONG": {"UPBIT>OKX"}}
+
+
+def test_load_verified_fail_closed(tmp_path):
+    """빈 legs·손상 파일 = 전 레그 차단({}), 파일 부재만 blocklist 모드(None) — fail-open 금지 (리뷰 결함 수정)."""
+    import json
+    from kimp.paper.engine import PaperEngine
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg = Config(raw={"storage": {"root": str(root)}})
+    assert PaperEngine._load_verified(cfg) is None                       # 파일 없음 → blocklist 모드
+    (root / "verified_ok.json").write_text(json.dumps({"generated_ms": 0, "legs": {}, "ok": []}))
+    assert PaperEngine._load_verified(cfg) == {}                         # 검증 0건 → 전 레그 차단
+    (root / "verified_ok.json").write_text('{"legs": {"XRP"')            # 손상 파일
+    assert PaperEngine._load_verified(cfg) == {}                         # → 전 레그 차단
+
+
+def test_resume_voids_unverified_leg(tmp_path):
+    """allowlist 모드에서 미검증 레그의 열린 사이클은 재기동 시 소급 무효 (리뷰 결함 수정)."""
+    eng, books, ledger = _mk_engine(tmp_path)
+    _feed(books)
+    async def go():
+        eng.wallet_state[("upbit", "XRP")] = (True, True)
+        eng.wallet_state[("binance", "XRP")] = (True, True)
+        eng.consider(_row(in_net=0.01))                        # upbit>binance 레그로 진입
+        assert len(eng.store.load_open()) == 1
+        eng2, _, _ = _mk_engine(tmp_path)
+        eng2.store, eng2.ledger = eng.store, eng.ledger
+        eng2.verified_ok = {"XRP": {"UPBIT>OKX"}}              # 재검증 결과 바낸 레그 탈락
+        assert eng2.resume() == 0
+        assert eng.store.load_open() == []
+        assert ledger[-1]["state"] == "VOID"
+        for t in list(eng._tasks) + list(eng2._tasks):
             t.cancel()
     asyncio.run(go())
 

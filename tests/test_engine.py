@@ -60,9 +60,22 @@ def test_compute_produces_row_with_net_edges():
 
 
 def test_stale_domestic_book_excluded():
-    _, store, eng = _engine_with_fresh_books()
-    store.update(_mk_book("upbit", "XRP", "KRW", "141000", "141100", ts=now_ms() - 60_000))
+    store = BookStore()
+    eng = PremiumEngine(Bus(), store, CFG)
+    store.update(_mk_book("binance", "XRP", "USDT", "99.9", "100"))
+    store.update(_mk_book("upbit", "XRP", "KRW", "141000", "141100", ts=now_ms() - 60_000))  # 처음부터 스테일
+    store.update(_mk_book("upbit", "USDT", "KRW", "1399", "1400"))
     assert eng.compute("XRP") == []
+
+
+def test_book_out_of_order_update_ignored():
+    """인계서 §2.3 흡수: 재연결·REST 혼용 시 옛 스냅샷이 새 호가를 덮지 못한다."""
+    store = BookStore()
+    store.update(_mk_book("upbit", "XRP", "KRW", "141000", "141100", ts=1000))
+    store.update(_mk_book("upbit", "XRP", "KRW", "999", "1000", ts=500))    # 역전 → 무시
+    assert store.get("upbit", "XRP", "KRW").bids[0].price == D("141000")
+    store.update(_mk_book("upbit", "XRP", "KRW", "142000", "142100", ts=2000))  # 정상 갱신
+    assert store.get("upbit", "XRP", "KRW").bids[0].price == D("142000")
 
 
 def test_missing_fx_still_computes_exec_side():

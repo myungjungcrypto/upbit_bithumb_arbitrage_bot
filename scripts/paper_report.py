@@ -52,7 +52,10 @@ def main() -> None:
     bl = load_blocklist(args.config)
 
     def blocked(c) -> bool:
-        return c["coin"].upper() in bl or f"{c['coin']}@{c['dom_ex']}".upper() in bl
+        # 레그 문법 (kimp.symbols.leg_blocked와 동일 — 이 스크립트는 stdlib 단독 실행 유지)
+        coin, dom = c["coin"].upper(), c["dom_ex"].upper()
+        ovs = (c.get("ovs_ex") or "binance").upper()
+        return coin in bl or f"{coin}@{dom}" in bl or f"{coin}>{ovs}" in bl or f"{coin}@{dom}>{ovs}" in bl
 
     all_settled = [c for c in cycles if c["state"] in ("SETTLED", "SETTLED_STUCK")]
     tainted = [c for c in all_settled if blocked(c)]

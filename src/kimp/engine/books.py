@@ -9,6 +9,15 @@ class BookStore:
         self._books: dict[tuple[str, str, str], Book] = {}
 
     def update(self, book: Book) -> None:
+        # 순서 역전 가드 (인계서 §2.3 흡수): 재연결·REST 혼용 시 옛 스냅샷이 새 호가를 덮지 못하게.
+        # 거래소 타임스탬프 우선, 없으면 로컬 수신 시각으로 비교
+        old = self._books.get(book.key)
+        if old is not None:
+            if book.ts_exchange is not None and old.ts_exchange is not None:
+                if book.ts_exchange < old.ts_exchange:
+                    return
+            elif book.ts_local < old.ts_local:
+                return
         self._books[book.key] = book
 
     def get(self, exchange: str, base: str, quote: str) -> Book | None:

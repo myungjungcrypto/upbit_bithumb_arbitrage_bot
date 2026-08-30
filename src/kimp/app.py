@@ -26,6 +26,7 @@ from .cycle.store import CycleStore
 from .engine.books import BookStore
 from .engine.runner import PremiumEngine
 from .paper.engine import PaperEngine
+from .symbols import leg_blocked
 from .storage.parquet import (
     BufferedParquetWriter,
     book_row,
@@ -216,7 +217,7 @@ async def run(cfg: Config) -> None:
                     if net is None or net < edge_thr:
                         continue
                     coin, dom_ex = r["coin"], r["dom_ex"]
-                    if coin in trade_blocklist or f"{coin}@{dom_ex}".upper() in trade_blocklist:
+                    if leg_blocked(trade_blocklist, coin, dom_ex, r["ovs_ex"]):
                         alerter.alert(
                             WARN, f"blocklist:{coin}",
                             f"{coin} 엣지 {net*100:.1f}% 관측 — V7 미검증 심볼이라 거래 차단 중 (동일성 확인 시 해제)",

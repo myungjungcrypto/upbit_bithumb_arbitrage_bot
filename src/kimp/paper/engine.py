@@ -27,6 +27,7 @@ from ..cycle.store import CycleStore
 from ..engine.books import BookStore
 from ..engine.premium import vwap_buy, vwap_sell
 from ..models import D, now_ms
+from ..symbols import leg_blocked, leg_key
 
 log = logging.getLogger("paper")
 
@@ -58,11 +59,12 @@ class PaperEngine:
         self.hedge_out = bool(p.get("hedge_out", True))
         self.transfer_min = p.get("transfer_minutes", {}) or {}
         # V7 미검증 심볼 — 자산 동일성 확인 전까지 거래 금지 (수집·관측은 계속).
-        # 항목 "COIN"=전역 차단, "COIN@bithumb"=해당 국내 레그만 차단
+        # 레그 문법은 symbols.leg_blocked 참조 ("COIN" / "COIN@dom" / "COIN>ovs" / "COIN@dom>ovs")
         self.blocklist: set[str] = {s.upper() for s in cfg.raw.get("universe", {}).get("trade_blocklist", [])}
-        # allowlist 모드: verify_universe.py가 생성한 검증 통과 목록이 있으면 그 안의 코인만 거래.
-        # 신규 상장은 verify 재실행 전까지 자동 차단 — "미검증 = 거래 불가"의 구조화
-        self.verified_ok: set[str] | None = self._load_verified(cfg)
+        # allowlist 모드: verify_universe.py가 생성한 검증 통과 목록이 있으면 그 레그만 거래.
+        # 신규 상장은 verify 재실행 전까지 자동 차단 — "미검증 = 거래 불가"의 구조화.
+        # M2: {코인: {"DOM>OVS", ...}} 레그 단위 — 구 포맷(코인 목록)은 바이낸스 레그만 검증된 것으로 해석
+        self.verified_ok: dict[str, set[str]] | None = self._load_verified(cfg)
         self._open_keys: set[tuple] = set()  # (coin, dom_ex, kind) — 같은 기회 중복 진입 방지
         self._tasks: set[asyncio.Task] = set()
 
@@ -74,17 +76,26 @@ class PaperEngine:
         path = Path(cfg.storage.get("root", "data")) / "verified_ok.json"
         try:
             d = json.loads(path.read_text())
-            ok = {s.upper() for s in d.get("ok", [])}
+            legs_raw = d.get("legs")
+            if isinstance(legs_raw, dict):  # M2 포맷: {coin: ["upbit>okx", ...]}
+                legs = {c.upper(): {str(l).upper() for l in ls} for c, ls in legs_raw.items()}
+            else:
+                # 구 포맷(코인 목록) = 바이낸스 기준 검증만 수행된 시절 — 다른 해외 레그는 미검증으로 차단
+                legs = {s.upper(): {"UPBIT>BINANCE", "BITHUMB>BINANCE"} for s in d.get("ok", [])}
             age_days = (now_ms() - int(d.get("generated_ms", 0))) / 86_400_000
-            log.info("verified allowlist: %d coins (생성 %.1f일 전%s)", len(ok), age_days,
+            log.info("verified allowlist: %d coins (생성 %.1f일 전%s%s)", len(legs), age_days,
+                     "" if isinstance(legs_raw, dict) else " · 구 포맷 — 바낸 레그만 허용, verify 재실행 권장",
                      " — 오래됨, verify_universe 재실행 권장" if age_days > 7 else "")
-            return ok if ok else None
+            if not legs:
+                log.error("verified allowlist가 비어 있음 — fail-closed: 전 레그 거래 차단 (verify_universe 재실행 필요)")
+            return legs  # 빈 dict = 전 레그 차단. "검증 0건 → allowlist 해제"는 fail-open이라 금지 (2026-08-30 리뷰)
         except FileNotFoundError:
             log.info("verified allowlist 없음 — blocklist 모드로 동작 (verify_universe 실행 시 allowlist 모드 전환)")
             return None
         except Exception:
-            log.exception("verified_ok.json 파싱 실패 — blocklist 모드")
-            return None
+            # 파일이 존재하는데 읽을 수 없음(손상 등) = 운용 중 이상 — 열어주는 쪽(None)이 아니라 닫는 쪽으로
+            log.exception("verified_ok.json 파싱 실패 — fail-closed: 전 레그 거래 차단 (파일 복구/verify 재실행 필요)")
+            return {}
 
     # ---------- 게이트 ----------
 
@@ -124,10 +135,10 @@ class PaperEngine:
         if not self.enabled:
             return
         coin, dom_ex, ovs_ex = row["coin"], row["dom_ex"], row["ovs_ex"]
-        if coin in self.blocklist or f"{coin}@{dom_ex}".upper() in self.blocklist:
+        if leg_blocked(self.blocklist, coin, dom_ex, ovs_ex):
             return  # V7 미검증/레그 차단 — 엣지가 아무리 좋아도 거래 금지
-        if self.verified_ok is not None and coin not in self.verified_ok:
-            return  # allowlist 모드: 검증 통과 코인만 (신규 상장 = 자동 차단)
+        if self.verified_ok is not None and leg_key(dom_ex, ovs_ex) not in self.verified_ok.get(coin.upper(), ()):
+            return  # allowlist 모드: 검증 통과 레그만 (신규 상장·미검증 해외 레그 = 자동 차단)
         for kind in ("in", "out"):
             net = row.get(f"{kind}_net")
             if net is None or net < self.entry_thr:
@@ -275,12 +286,16 @@ class PaperEngine:
 
     def resume(self) -> int:
         """재기동 시 열린 사이클 이어가기 (T6) — 도착 타이머 재장전.
-        blocklist에 소급 등재된 코인의 사이클은 무효 처리 (손익 미집계 — 오염 방지)."""
+        blocklist 소급 등재 또는 allowlist에서 빠진(미검증) 레그의 사이클은 무효 처리
+        (손익 미집계 — 오염 방지. 예: M1이 코인 단위 allowlist로 열었던 okx 레그가 M2 레그 검증에서 탈락)."""
         n = 0
         for c in self.store.load_open():
-            if c.coin in self.blocklist:
+            unverified = self.verified_ok is not None and leg_key(c.dom_ex, c.ovs_ex) not in self.verified_ok.get(
+                c.coin.upper(), ()
+            )
+            if leg_blocked(self.blocklist, c.coin, c.dom_ex, c.ovs_ex) or unverified:
                 c.pnl_usd = 0.0
-                c.note = "trade_blocklist 소급 무효 (V7 미검증 심볼)"
+                c.note = "trade_blocklist/미검증 레그 소급 무효 (V7)"
                 c.stamp(VOID)
                 self.store.save(c)
                 self.ledger.add(
