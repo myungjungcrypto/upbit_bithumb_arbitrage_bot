@@ -59,6 +59,28 @@ def test_risk_hourly_rate():
 
 # ---------- CycleStore (T6 영속·복구) ----------
 
+def test_cycle_store_summary(tmp_path):
+    from kimp.models import now_ms
+
+    s = CycleStore(tmp_path / "sum.db")
+    for coin, pnl in [("ONG", 12.0), ("PROM", -3.0), ("ONG", 8.0)]:
+        c = Cycle(kind="out", coin=coin, dom_ex="bithumb", ovs_ex="binance", notional_usd=D(2000))
+        c.pnl_usd = pnl
+        c.stamp(SETTLED)
+        s.save(c)
+    o = Cycle(kind="in", coin="XRP", dom_ex="upbit", ovs_ex="binance", notional_usd=D(2000))
+    o.stamp(IN_FLIGHT)
+    s.save(o)
+
+    r = s.summary(today_start_ms=0)   # 전부 오늘로 취급
+    assert r["settled"] == 3 and r["wins"] == 2 and r["open"] == 1
+    assert abs(r["pnl_total"] - 17.0) < 1e-9 and abs(r["pnl_today"] - 17.0) < 1e-9
+    assert abs(r["by_coin"]["ONG"] - 20.0) < 1e-9
+
+    r2 = s.summary(today_start_ms=now_ms() + 10_000)  # 미래 기준 → 오늘 0
+    assert r2["pnl_today"] == 0.0 and abs(r2["pnl_total"] - 17.0) < 1e-9
+
+
 def test_cycle_store_roundtrip(tmp_path):
     s = CycleStore(tmp_path / "cycles.db")
     c = Cycle(kind="in", coin="XRP", dom_ex="upbit", ovs_ex="binance", notional_usd=D(2000))

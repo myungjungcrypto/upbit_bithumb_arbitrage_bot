@@ -141,6 +141,16 @@ async def run(cfg: Config) -> None:
     paper = PaperEngine(bus, store, cycle_store, risk, alerter, wallet_state, cfg, writers["paper_cycles"])
     log.info("paper trading: %s", "ON" if paper.enabled else "OFF")
 
+    def _today_start_ms() -> int:
+        from datetime import datetime as _dt, timezone as _tz
+        now = _dt.now(_tz.utc)
+        return int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+
+    # 재기동 시 오늘 실현손익을 원장에서 복원 — 크래시/재시작으로 일손실 L1이 리셋되는 구멍 봉쇄
+    risk.daily_pnl = cycle_store.summary(_today_start_ms())["pnl_today"]
+    if risk.daily_pnl:
+        log.info("일손익 복원: $%.2f (원장 기준)", risk.daily_pnl)
+
     # --- 텔레그램 관제탑 (양방향): /status /stop /resume + 출금 승인 버튼 (§1.3, §4.1) ---
     control = TelegramControl(cfg.telegram_token, cfg.telegram_chat_id)
 
@@ -158,9 +168,23 @@ async def run(cfg: Config) -> None:
         risk.consecutive_failures = 0
         return "▶️ L1 해제 — 신규 진입 재개"
 
+    def _report_text() -> str:
+        s = cycle_store.summary(_today_start_ms())
+        top = sorted(s["by_coin"].items(), key=lambda kv: -kv[1])[:5]
+        lines = [
+            f"📊 페이퍼 성적 (실거래 아님)",
+            f"정산 {s['settled']}건 · 승률 {s['wins']}/{s['settled']}"
+            + (f" ({s['wins']/s['settled']*100:.0f}%)" if s["settled"] else ""),
+            f"총손익 ${s['pnl_total']:,.2f} · 오늘 ${s['pnl_today']:,.2f} · 진행 {s['open']}건",
+        ]
+        if top:
+            lines.append("상위: " + ", ".join(f"{c} ${p:+,.0f}" for c, p in top))
+        return "\n".join(lines)
+
     control.on_command("/status", _status_text)
     control.on_command("/stop", _stop)
     control.on_command("/resume", _resume)
+    control.on_command("/report", _report_text)
     if control.live:
         log.info("telegram control tower: ON (/status /stop /resume + 승인 버튼)")
 

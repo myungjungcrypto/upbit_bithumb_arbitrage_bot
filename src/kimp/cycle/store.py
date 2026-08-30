@@ -33,5 +33,28 @@ class CycleStore:
         rows = self._db.execute(f"SELECT body FROM cycles WHERE state IN ({q})", OPEN_STATES).fetchall()
         return [Cycle.from_json(r[0]) for r in rows]
 
+    def summary(self, today_start_ms: int) -> dict:
+        """원장 요약 — /status·/report와 재기동 시 일손익 복원용 (T13 우회 방지)."""
+        import json
+
+        rows = self._db.execute("SELECT state, updated_ms, body FROM cycles").fetchall()
+        out = {"settled": 0, "wins": 0, "pnl_total": 0.0, "pnl_today": 0.0, "open": 0, "by_coin": {}}
+        for state, updated_ms, body in rows:
+            if state in OPEN_STATES:
+                out["open"] += 1
+                continue
+            if state not in ("SETTLED", "SETTLED_STUCK"):
+                continue
+            d = json.loads(body)
+            pnl = d.get("pnl_usd") or 0.0
+            out["settled"] += 1
+            out["pnl_total"] += pnl
+            out["by_coin"][d.get("coin", "?")] = out["by_coin"].get(d.get("coin", "?"), 0.0) + pnl
+            if pnl > 0:
+                out["wins"] += 1
+            if updated_ms >= today_start_ms:
+                out["pnl_today"] += pnl
+        return out
+
     def close(self) -> None:
         self._db.close()
