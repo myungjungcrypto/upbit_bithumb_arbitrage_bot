@@ -96,19 +96,19 @@ def main() -> None:
 
         agg: dict[tuple, list] = defaultdict(lambda: [0, 0.0])
         for c in settled:
-            k = (c["coin"], c["kind"], c["dom_ex"])
+            k = (c["coin"], c["kind"], c["dom_ex"], c.get("ovs_ex") or "binance")
             agg[k][0] += 1
             agg[k][1] += c.get("pnl_usd") or 0
-        print("\n코인×방향×거래소 상위 (손익순):")
-        for (coin, kind, dom), (n, p) in sorted(agg.items(), key=lambda kv: -kv[1][1])[:12]:
-            print(f"  {coin:8} {kind.upper():3} {dom:8} {n:3}건  ${p:+,.2f}")
+        print("\n코인×방향×레그 상위 (손익순) — M3 라이브 거래소 선정 근거:")
+        for (coin, kind, dom, ovs), (n, p) in sorted(agg.items(), key=lambda kv: -kv[1][1])[:12]:
+            print(f"  {coin:8} {kind.upper():3} {dom:8}↔{ovs:8} {n:3}건  ${p:+,.2f}")
 
     if open_:
         print("\n진행 중:")
         now = datetime.now(timezone.utc).timestamp() * 1000
         for c in sorted(open_, key=lambda c: c.get("arrival_at_ms") or 0):
             eta = ((c.get("arrival_at_ms") or now) - now) / 60000
-            print(f"  {c['coin']:8} {c['kind'].upper():3} {c['dom_ex']:8} ${num(c['notional_usd']):,.0f}"
+            print(f"  {c['coin']:8} {c['kind'].upper():3} {c['dom_ex']:8}↔{c.get('ovs_ex') or 'binance':8} ${num(c['notional_usd']):,.0f}"
                   f" @기대 {(c.get('entry_edge') or 0)*100:.2f}%  도착 {'지남' if eta <= 0 else f'{eta:.0f}분 후'}"
                   f"{' (헤지락)' if c.get('hedged') else ' (naked)'}")
 
