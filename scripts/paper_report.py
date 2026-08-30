@@ -24,9 +24,20 @@ def ts_str(ms) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%m-%d %H:%M")
 
 
+def load_blocklist(config_path: str) -> set[str]:
+    try:
+        import yaml
+
+        cfg = yaml.safe_load(open(config_path))
+        return {s.upper() for s in cfg.get("universe", {}).get("trade_blocklist", [])}
+    except Exception:
+        return set()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/cycles.db")
+    ap.add_argument("--config", default="config/default.yaml")
     args = ap.parse_args()
 
     rows = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True).execute(
@@ -36,7 +47,19 @@ def main() -> None:
     if not cycles:
         raise SystemExit("사이클 없음 — 페이퍼가 아직 진입 전이거나 DB 경로 확인")
 
-    settled = [c for c in cycles if c["state"] in ("SETTLED", "SETTLED_STUCK")]
+    # 현행 차단 목록 기준으로 과거 정산분을 소급 분류 — 차단 배포 전 진입분(전송 불가 판정)
+    # 은 '실현 불가능했던 손익'이므로 청정 집계에서 제외
+    bl = load_blocklist(args.config)
+
+    def blocked(c) -> bool:
+        return c["coin"].upper() in bl or f"{c['coin']}@{c['dom_ex']}".upper() in bl
+
+    all_settled = [c for c in cycles if c["state"] in ("SETTLED", "SETTLED_STUCK")]
+    tainted = [c for c in all_settled if blocked(c)]
+    settled = [c for c in all_settled if not blocked(c)]
+    if tainted:
+        tp = sum(c.get("pnl_usd") or 0 for c in tainted)
+        print(f"⚠️ 차단 레그의 과거 정산분 {len(tainted)}건 ${tp:+,.2f} — 전송 불가 판정 이전 진입분, 아래 집계에서 제외됨")
     open_ = [c for c in cycles if c["state"] in OPEN_STATES]
     void = [c for c in cycles if c["state"] == "VOID"]
 
