@@ -101,7 +101,7 @@ def test_cycle_store_roundtrip(tmp_path):
 
 def _mk_engine(tmp_path):
     cfg = Config(raw={
-        "coins": ["XRP"], "overseas_ref": "binance",
+        "coins": ["XRP"],
         "staleness": {"book_ms": 60_000},
         "fees": {"taker": {"upbit": 0.0005, "binance": 0.001}},
         "withdraw_fee_usd_est": {"default": 0, "USDT": 0, "XRP": 0},  # 검증 단순화: 수수료 비율만
@@ -271,9 +271,40 @@ def test_out_withdraw_pct_fee_applied(tmp_path):
     eng, _, _ = _mk_engine(tmp_path)
     eng.cfg.raw["withdraw_fee_pct"] = {"upbit": {"default": 0.01}}
     n = D(2000)
-    fee_in = eng._fees("in", "XRP", "upbit", n)
-    fee_out = eng._fees("out", "XRP", "upbit", n)
+    fee_in = eng._fees("in", "XRP", "upbit", "binance", n)
+    fee_out = eng._fees("out", "XRP", "upbit", "binance", n)
     assert fee_out - fee_in == n * D("0.01")   # $20 차이
+
+
+def test_batch_best_edge_leg_claims_slot(tmp_path):
+    """M1: 같은 틱 배치에 해외 3곳 레그가 오면 최고 엣지 레그가 슬롯을 잡는다 (config 순서 아님)."""
+    from kimp.paper.engine import _best_edge
+    eng, books, _ = _mk_engine(tmp_path)
+    eng.cfg.raw["fees"]["taker"]["okx"] = 0.0008
+    _feed(books)
+    books.update(_book("okx", "XRP", "USDT", "99.9", "100"))
+    async def go():
+        eng.wallet_state[("upbit", "XRP")] = (True, True)
+        eng.wallet_state[("binance", "XRP")] = (True, True)
+        eng.wallet_state[("okx", "XRP")] = (True, True)
+        batch = [_row(in_net=0.010), {**_row(in_net=0.012), "ovs_ex": "okx"}]
+        for r in sorted(batch, key=_best_edge, reverse=True):   # run() 루프와 동일한 순서
+            eng.consider(r)
+        opens = eng.store.load_open()
+        assert len(opens) == 1 and opens[0].ovs_ex == "okx"
+        for t in list(eng._tasks):
+            t.cancel()
+    asyncio.run(go())
+
+
+def test_fees_use_leg_overseas_exchange(tmp_path):
+    """M1: 수수료는 레그의 해외 거래소 taker를 쓴다 — okx 0.1% vs binance 0.1% 가정 차등 검증."""
+    eng, _, _ = _mk_engine(tmp_path)
+    eng.cfg.raw["fees"]["taker"]["okx"] = 0.0008
+    n = D(2000)
+    fee_bn = eng._fees("in", "XRP", "upbit", "binance", n)   # 0.001 + 0.0005×2
+    fee_ok = eng._fees("in", "XRP", "upbit", "okx", n)       # 0.0008 + 0.0005×2
+    assert fee_bn - fee_ok == n * (D("0.001") - D("0.0008"))
 
 
 def test_paper_max_edge_and_threshold(tmp_path):

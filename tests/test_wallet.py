@@ -86,3 +86,48 @@ def test_parse_assetsstatus_malformed():
     assert parse_assetsstatus({}) == []
     assert parse_assetsstatus({"data": "oops"}) == []
     assert parse_assetsstatus({"data": {"BTC": "oops", "ETH": {"withdrawal_status": None}}}) == []
+
+
+def test_parse_okx_currencies():
+    from kimp.collectors.wallet_okx import okx_timestamp, parse_currencies, sign_okx
+
+    data = {"code": "0", "data": [
+        {"ccy": "BTC", "chain": "BTC-Bitcoin", "canDep": True, "canWd": True},
+        {"ccy": "usdt", "chain": "USDT-TRC20", "canDep": False, "canWd": False},
+        {"ccy": "USDT", "chain": "USDT-ERC20", "canDep": True, "canWd": False},  # 체인 OR 집계
+        {"ccy": None},          # 무시
+        "garbage",              # 무시
+    ]}
+    rows = dict((c, (d, w)) for c, d, w in parse_currencies(data))
+    assert rows["BTC"] == (True, True)
+    assert rows["USDT"] == (True, False)   # 대문자 정규화 + 한 체인이라도 열리면 가능
+    assert len(rows) == 2
+    assert parse_currencies({"data": "oops"}) == []
+
+    ts = okx_timestamp()
+    assert ts.endswith("Z") and "T" in ts and len(ts.rsplit(".", 1)[1]) == 4  # 밀리초 3자리 + Z
+    sig = sign_okx("sec", ts, "GET", "/api/v5/asset/currencies")
+    import base64
+    assert len(base64.b64decode(sig)) == 32  # sha256 raw → base64
+
+
+def test_parse_bybit_coin_info():
+    from kimp.collectors.wallet_bybit import parse_coin_info, sign_bybit
+
+    data = {"retCode": 0, "result": {"rows": [
+        {"coin": "BTC", "chains": [
+            {"chain": "BTC", "chainDeposit": "1", "chainWithdraw": "1"},
+            {"chain": "BEP20", "chainDeposit": "0", "chainWithdraw": "0"},
+        ]},
+        {"coin": "wal", "chains": [{"chain": "SUI", "chainDeposit": "0", "chainWithdraw": "1"}]},
+        {"coin": "BAD", "chains": []},   # 무시
+        {"coin": None, "chains": [{}]},  # 무시
+    ]}}
+    rows = dict((c, (d, w)) for c, d, w in parse_coin_info(data))
+    assert rows["BTC"] == (True, True)
+    assert rows["WAL"] == (False, True)  # 입금 전면 정지 감지 (V8 핵심 케이스)
+    assert len(rows) == 2
+    assert parse_coin_info({"result": {}}) == []
+
+    sig = sign_bybit("sec", "1000", "key", "10000", "")
+    assert len(sig) == 64 and int(sig, 16) is not None  # hex sha256

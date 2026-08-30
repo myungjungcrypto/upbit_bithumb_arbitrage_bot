@@ -13,7 +13,6 @@ CFG = Config(
         "coins": ["XRP"],
         "domestic": ["upbit"],
         "overseas": ["binance"],
-        "overseas_ref": "binance",
         "ladder_usd": [1000],
         "staleness": {"book_ms": 5000, "fx_ms": 120000},
         "engine": {"min_interval_ms": 0},
@@ -86,3 +85,22 @@ def test_usdt_book_update_triggers_all_coins():
 
     rows = asyncio.run(go())
     assert rows and rows[0]["coin"] == "XRP"
+
+
+def test_multi_overseas_rows_and_per_exchange_fees():
+    """M1: overseas 3곳이면 (국내×해외)별 행이 나오고, 수수료는 각 해외 taker를 쓴다."""
+    cfg = Config(raw={**CFG.raw, "overseas": ["binance", "bybit", "okx"],
+                      "fees": {"taker": {"upbit": 0.0005, "binance": 0.001, "bybit": 0.001, "okx": 0.0008}}})
+    store = BookStore()
+    eng = PremiumEngine(Bus(), store, cfg)
+    store.update(_mk_book("upbit", "XRP", "KRW", "141000", "141100"))
+    store.update(_mk_book("upbit", "USDT", "KRW", "1399", "1400"))
+    store.update(_mk_book("binance", "XRP", "USDT", "99.9", "100"))
+    store.update(_mk_book("okx", "XRP", "USDT", "99.9", "100"))
+    # bybit 호가 없음 → bybit 레그는 행이 없어야 함 (전체 계산이 죽으면 안 됨)
+    rows = eng.compute("XRP")
+    assert {r["ovs_ex"] for r in rows} == {"binance", "okx"}
+    by = {r["ovs_ex"]: r for r in rows}
+    # 같은 호가인데 okx taker가 2bp 싸므로 in_net이 정확히 그만큼 높다
+    assert abs((by["okx"]["in_net"] - by["binance"]["in_net"]) - 0.0002) < 1e-9
+    assert by["okx"]["in_gross"] == by["binance"]["in_gross"]

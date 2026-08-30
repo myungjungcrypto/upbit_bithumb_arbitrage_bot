@@ -37,9 +37,11 @@ except ImportError:
 
 HORIZONS_MIN = (5, 15, 30)
 COLS = [
-    "ts", "coin", "dom_ex", "notional_usd", "in_net", "out_net", "exec_mid",
+    "ts", "coin", "dom_ex", "ovs_ex", "notional_usd", "in_net", "out_net", "exec_mid",
     "in_capacity_usd", "out_capacity_usd",
 ]
+# 레그 식별자 (M1 해외 다변화): 한 기회 = (코인, 국내, 해외, 금액대)
+GROUP = ["coin", "dom_ex", "ovs_ex", "notional_usd"]
 
 
 def day_partitions(data_root: str, since: date | None) -> list[tuple[date, Path]]:
@@ -59,7 +61,16 @@ F32_COLS = ["in_net", "out_net", "exec_mid", "in_capacity_usd", "out_capacity_us
 
 
 def load_day(part_dir: Path, coin: str | None) -> pl.DataFrame:
-    lf = pl.scan_parquet(str(part_dir / "*.parquet")).select(COLS)
+    files = sorted(part_dir.glob("*.parquet"))
+    if not files:
+        return pl.DataFrame([])
+    # M1 전환일에 구 스키마(ovs_ex 없음)·신 스키마 파일이 한 파티션에 섞임 — 파일별 스캔 후 diagonal 결합
+    lf = pl.concat([pl.scan_parquet(str(f)) for f in files], how="diagonal_relaxed")
+    if "ovs_ex" not in lf.collect_schema().names():
+        lf = lf.with_columns(pl.lit("binance").alias("ovs_ex"))  # M1 이전 = 바이낸스 단일 기준
+    else:
+        lf = lf.with_columns(pl.col("ovs_ex").fill_null("binance"))
+    lf = lf.select(COLS)
     if coin:
         lf = lf.filter(pl.col("coin") == coin)
     # 메모리 다이어트: 문자열 → Categorical(정수 코드), 지표 → f32 — 12M행 파티션이 ~1/3로
@@ -69,6 +80,7 @@ def load_day(part_dir: Path, coin: str | None) -> pl.DataFrame:
         .with_columns(
             pl.col("coin").cast(pl.Categorical),
             pl.col("dom_ex").cast(pl.Categorical),
+            pl.col("ovs_ex").cast(pl.Categorical),
             *(pl.col(c).cast(pl.Float32) for c in F32_COLS),
         )
         .sort("ts")
@@ -95,28 +107,28 @@ def load_wallet(data_root: str) -> pl.DataFrame | None:
 
 
 def episodes(df: pl.DataFrame, edge_col: str, thr: float, gap_ms: int = 60_000) -> pl.DataFrame:
-    """(coin, dom_ex, notional_usd)별로 엣지≥thr 연속 구간을 에피소드로 묶는다.
+    """(coin, dom_ex, ovs_ex, notional_usd)별로 엣지≥thr 연속 구간을 에피소드로 묶는다.
 
     gap_ms는 저장 게이트의 하트비트(30s)보다 커야 한다 — 작으면 지속 기회 하나가
     수백 개의 1틱 에피소드로 조각나 통계·메모리가 모두 깨진다 (2026-08-23 실측 버그)."""
     d = (
-        df.select(["ts", "coin", "dom_ex", "notional_usd", edge_col])
+        df.select(["ts", *GROUP, edge_col])
         .drop_nulls(edge_col)
         .filter(pl.col(edge_col) >= thr)
-        .sort(["coin", "dom_ex", "notional_usd", "ts"])
+        .sort([*GROUP, "ts"])
     )
     if d.is_empty():
         return d
     d = d.with_columns(
         (
-            (pl.col("ts") - pl.col("ts").shift(1).over(["coin", "dom_ex", "notional_usd"]) > gap_ms)
+            (pl.col("ts") - pl.col("ts").shift(1).over(GROUP) > gap_ms)
             .fill_null(True)
             .cum_sum()
-            .over(["coin", "dom_ex", "notional_usd"])
+            .over(GROUP)
         ).alias("episode")
     )
     return (
-        d.group_by(["coin", "dom_ex", "notional_usd", "episode"])
+        d.group_by([*GROUP, "episode"])
         .agg(
             start=pl.col("ts").min(),
             duration_s=((pl.col("ts").max() - pl.col("ts").min()) / 1000),
@@ -130,7 +142,7 @@ def episodes(df: pl.DataFrame, edge_col: str, thr: float, gap_ms: int = 60_000) 
 
 def episode_summary(ep: pl.DataFrame) -> pl.DataFrame:
     return (
-        ep.group_by(["coin", "dom_ex", "notional_usd"])
+        ep.group_by(GROUP)
         .agg(
             n_episodes=pl.len(),
             med_duration_s=pl.col("duration_s").median(),
@@ -144,10 +156,10 @@ def episode_summary(ep: pl.DataFrame) -> pl.DataFrame:
 
 def persistence_samples(df: pl.DataFrame, ep: pl.DataFrame) -> pl.DataFrame:
     """에피소드 진입 대비 +N분 실행김프 변화 샘플 [delta_pp, horizon_min] — 일 청크 내에서 산출."""
-    base = df.select(["ts", "coin", "dom_ex", "notional_usd", "exec_mid"]).drop_nulls("exec_mid")
-    entries = ep.select(["coin", "dom_ex", "notional_usd", "start"]).join(
+    base = df.select(["ts", *GROUP, "exec_mid"]).drop_nulls("exec_mid")
+    entries = ep.select([*GROUP, "start"]).join(
         base.rename({"ts": "start", "exec_mid": "exec_at_entry"}),
-        on=["coin", "dom_ex", "notional_usd", "start"],
+        on=[*GROUP, "start"],
         how="inner",
     )
     if len(entries) > 50_000:  # 메모리 안전벨트 — 통계에는 5만 샘플이면 충분
@@ -159,7 +171,7 @@ def persistence_samples(df: pl.DataFrame, ep: pl.DataFrame) -> pl.DataFrame:
             base.sort("ts").rename({"exec_mid": "exec_at_h"}),
             left_on="t_h",
             right_on="ts",
-            by=["coin", "dom_ex", "notional_usd"],
+            by=GROUP,
             strategy="nearest",
             tolerance=60_000,
         ).drop_nulls("exec_at_h")
@@ -193,10 +205,10 @@ def harvest_cycles(
     cap_col = f"{direction}_capacity_usd"
     net_col = f"{direction}_net"
     starts = (
-        ep.select(["coin", "dom_ex", "notional_usd", "start", "duration_s", "mean"])
+        ep.select([*GROUP, "start", "duration_s", "mean"])
         .join(
-            df.select(["ts", "coin", "dom_ex", "notional_usd", net_col, cap_col]).rename({"ts": "start"}),
-            on=["coin", "dom_ex", "notional_usd", "start"],
+            df.select(["ts", *GROUP, net_col, cap_col]).rename({"ts": "start"}),
+            on=[*GROUP, "start"],
             how="inner",
         )
         .sort("start")
@@ -208,17 +220,16 @@ def harvest_cycles(
     )
     flag = "deposit_ok" if direction == "in" else "withdraw_ok"
     starts = starts.filter(pl.col(flag) == True).sort("start")  # noqa: E712 — null(미확인)도 제외
-    # 해외측(바이낸스) 게이트 — IN=해외 출금 가능, OUT=해외 입금 가능 (V8).
+    # 해외측 게이트 — IN=해외 출금 가능, OUT=해외 입금 가능 (V8). 레그의 ovs_ex 거래소와 대조 (M1).
     # 과거 데이터 호환: 해외 상태가 '알려진 정지'인 경우만 제외 (미확인은 통과 — 수집 축적 후 강화)
-    ovs_w = wallet.filter(pl.col("dom_ex") == "binance")
+    ovs_w = wallet.rename({"dom_ex": "ovs_ex"}).select(
+        "wts", "ovs_ex", "coin",
+        pl.col("deposit_ok").alias("ovs_dep"),
+        pl.col("withdraw_ok").alias("ovs_wd"),
+    ).sort("wts")
     if not ovs_w.is_empty() and not starts.is_empty():
         starts = starts.join_asof(
-            ovs_w.select(
-                "wts", "coin",
-                pl.col("deposit_ok").alias("ovs_dep"),
-                pl.col("withdraw_ok").alias("ovs_wd"),
-            ).sort("wts"),
-            left_on="start", right_on="wts", by=["coin"], strategy="backward",
+            ovs_w, left_on="start", right_on="wts", by=["ovs_ex", "coin"], strategy="backward",
         )
         ovs_flag = "ovs_wd" if direction == "in" else "ovs_dep"
         starts = starts.filter(pl.col(ovs_flag).is_null() | (pl.col(ovs_flag) == True)).sort("start")  # noqa: E712
@@ -228,6 +239,8 @@ def harvest_cycles(
         cap, entry_edge = r.get(cap_col), r.get(net_col)
         if cap is None or entry_edge is None or cap <= 0:
             continue
+        # 쿨다운 키에 ovs_ex를 넣지 않는다 — 같은 김프가 해외 3곳에 동시에 보이므로
+        # (코인, 국내)당 한 슬롯만 세어야 같은 기회의 3중 중복 집계를 막는다 (자본은 하나)
         key = (r["coin"], r["dom_ex"])
         notional = min(cap, cycle_cap)
         duration_ms = int((r.get("duration_s") or 0) * 1000)
@@ -242,7 +255,7 @@ def harvest_cycles(
                 last_entry[key] = t
                 edge = entry_edge if first else mean_edge  # 재진입은 평균 엣지 근사
                 target.append(
-                    {"coin": r["coin"], "dom_ex": r["dom_ex"], "start": t,
+                    {"coin": r["coin"], "dom_ex": r["dom_ex"], "ovs_ex": r["ovs_ex"], "start": t,
                      "notional_usd": notional, "edge": edge, "profit_usd": notional * edge}
                 )
             first = False
@@ -363,7 +376,7 @@ def main() -> None:
             f"= 자본 ${args.capital:,.0f} 대비 일 {total/span_days/args.capital*100:.2f}%"
         )
         top = (
-            h.group_by("coin").agg(profit=pl.col("profit_usd").sum(), cycles=pl.len())
+            h.group_by(["coin", "ovs_ex"]).agg(profit=pl.col("profit_usd").sum(), cycles=pl.len())
             .sort("profit", descending=True).head(10)
         )
         with pl.Config(tbl_rows=10):
@@ -371,8 +384,8 @@ def main() -> None:
         if suspect_rows[dkey]:
             s = pl.DataFrame(suspect_rows[dkey])
             s_top = (
-                s.group_by("coin").agg(would_be_profit=pl.col("profit_usd").sum(), cycles=pl.len(),
-                                       max_edge_pct=(pl.col("edge").max() * 100))
+                s.group_by(["coin", "ovs_ex"]).agg(would_be_profit=pl.col("profit_usd").sum(), cycles=pl.len(),
+                                                   max_edge_pct=(pl.col("edge").max() * 100))
                 .sort("would_be_profit", descending=True).head(10)
             )
             print(

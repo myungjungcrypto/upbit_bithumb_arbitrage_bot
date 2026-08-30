@@ -29,10 +29,6 @@ class Config:
         return list(self.raw.get("overseas", ["binance"]))
 
     @property
-    def overseas_ref(self) -> str:
-        return self.raw.get("overseas_ref", "binance")
-
-    @property
     def ladder_usd(self) -> list[Decimal]:
         return [D(x) for x in self.raw.get("ladder_usd", [5000])]
 
@@ -96,6 +92,26 @@ class Config:
     @property
     def binance_api_secret(self) -> str:
         return os.environ.get("BINANCE_API_SECRET", "")
+
+    @property
+    def okx_api_key(self) -> str:
+        return os.environ.get("OKX_API_KEY", "")
+
+    @property
+    def okx_api_secret(self) -> str:
+        return os.environ.get("OKX_API_SECRET", "")
+
+    @property
+    def okx_api_passphrase(self) -> str:
+        return os.environ.get("OKX_API_PASSPHRASE", "")
+
+    @property
+    def bybit_api_key(self) -> str:
+        return os.environ.get("BYBIT_API_KEY", "")
+
+    @property
+    def bybit_api_secret(self) -> str:
+        return os.environ.get("BYBIT_API_SECRET", "")
 
     @property
     def telegram_token(self) -> str:

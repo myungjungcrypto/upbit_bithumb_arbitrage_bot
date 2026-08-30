@@ -67,3 +67,21 @@ def test_include_exclude():
 def test_stables_never_in_universe():
     uni = build_universe([], STABLES | {"BTC"}, None, STABLES | {"BTC"}, {}, 150, [], [])
     assert uni["all"] == ["BTC"]
+
+
+def test_multi_overseas_lists_are_universe_intersections():
+    """M1: bybit/okx 구독 목록 = 유니버스 ∩ 각 거래소 상장분, 조회 실패 시 시드 폴백."""
+    uni = build_universe(
+        seed=SEED,
+        upbit_bases={"BTC", "ETH", "XRP", "DOGE"},
+        bithumb_bases=set(),
+        binance_bases={"BTC", "ETH", "XRP", "DOGE"},
+        turnover={},
+        max_coins=150,
+        include=[],
+        exclude=[],
+        bybit_bases={"BTC", "XRP", "NOTKRW"},   # NOTKRW는 국내 미상장 → 제외
+        okx_bases=None,                          # 조회 실패
+    )
+    assert uni["bybit"] == ["BTC", "XRP"]
+    assert uni["okx"] == sorted(set(SEED) & set(uni["all"]))  # 폴백: 유니버스 ∩ 시드

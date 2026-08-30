@@ -53,6 +53,27 @@ async def fetch_binance_usdt_bases(sess) -> set[str]:
     }
 
 
+async def fetch_bybit_usdt_bases(sess) -> set[str]:
+    data = await _get_json(
+        sess, "https://api.bybit.com/v5/market/instruments-info?category=spot&limit=1000"
+    )
+    return {
+        i["baseCoin"]
+        for i in (data.get("result") or {}).get("list", [])
+        if i.get("quoteCoin") == "USDT" and i.get("status") == "Trading"
+    }
+
+
+async def fetch_okx_usdt_bases(sess) -> set[str]:
+    data = await _get_json(sess, "https://www.okx.com/api/v5/public/instruments?instType=SPOT")
+    out = set()
+    for i in data.get("data", []):
+        inst = i.get("instId", "")
+        if inst.endswith("-USDT") and i.get("state") == "live":
+            out.add(inst.rsplit("-", 1)[0])
+    return out
+
+
 async def fetch_upbit_turnover(sess) -> dict[str, float]:
     """코인 → 24h 원화 거래대금. max_coins 컷의 정렬 기준."""
     data = await _get_json(sess, UPBIT_TICKER_ALL_URL)
@@ -73,6 +94,8 @@ def build_universe(
     max_coins: int,
     include: list[str],
     exclude: list[str],
+    bybit_bases: set[str] | None = None,
+    okx_bases: set[str] | None = None,
 ) -> dict[str, list[str]]:
     """순수 함수 (테스트 대상). 반환: {"upbit": [...], "bithumb": [...], "binance": [...], "all": [...]}"""
     banned = STABLES | set(exclude)
@@ -108,10 +131,18 @@ def build_universe(
         up &= allc
         bt &= allc
 
+    def ovs_list(bases: set[str] | None) -> list[str]:
+        """해외 거래소별 구독 목록 — 유니버스 ∩ 그 거래소 상장분 (조회 실패 시 시드)."""
+        if bases is None:
+            return sorted(allc & set(seed)) or sorted(set(seed) - banned)
+        return sorted(allc & clean(bases))
+
     return {
         "upbit": sorted(up),
         "bithumb": sorted(bt),
         "binance": sorted(allc if ovs is None else (allc & ovs)),
+        "bybit": ovs_list(bybit_bases),
+        "okx": ovs_list(okx_bases),
         "all": sorted(allc),
     }
 
@@ -120,8 +151,7 @@ async def resolve_universe(cfg: Config) -> dict[str, list[str]]:
     ucfg = cfg.raw.get("universe", {})
     seed = cfg.coins
     if ucfg.get("mode", "auto") != "auto":
-        static = {"upbit": seed, "bithumb": seed, "binance": seed, "all": seed}
-        return static
+        return {"upbit": seed, "bithumb": seed, "binance": seed, "bybit": seed, "okx": seed, "all": seed}
 
     async with aiohttp.ClientSession(
         trust_env=True, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
@@ -133,10 +163,12 @@ async def resolve_universe(cfg: Config) -> dict[str, list[str]]:
                 log.warning("universe fetch failed (%s): %r — 폴백 사용", name, e)
                 return None
 
-        upbit_b, bithumb_b, binance_b, turnover = await asyncio.gather(
+        upbit_b, bithumb_b, binance_b, bybit_b, okx_b, turnover = await asyncio.gather(
             safe(fetch_upbit_krw_bases(sess), "upbit"),
             safe(fetch_bithumb_krw_bases(sess), "bithumb"),
             safe(fetch_binance_usdt_bases(sess), "binance"),
+            safe(fetch_bybit_usdt_bases(sess), "bybit"),
+            safe(fetch_okx_usdt_bases(sess), "okx"),
             safe(fetch_upbit_turnover(sess), "turnover"),
         )
     uni = build_universe(
@@ -148,10 +180,13 @@ async def resolve_universe(cfg: Config) -> dict[str, list[str]]:
         int(ucfg.get("max_coins", 150)),
         list(ucfg.get("include", [])),
         list(ucfg.get("exclude", [])),
+        bybit_bases=bybit_b,
+        okx_bases=okx_b,
     )
     log.info(
-        "universe resolved: upbit=%d bithumb=%d binance=%d all=%d",
-        len(uni["upbit"]), len(uni["bithumb"]), len(uni["binance"]), len(uni["all"]),
+        "universe resolved: upbit=%d bithumb=%d binance=%d bybit=%d okx=%d all=%d",
+        len(uni["upbit"]), len(uni["bithumb"]), len(uni["binance"]),
+        len(uni["bybit"]), len(uni["okx"]), len(uni["all"]),
     )
     return uni
 

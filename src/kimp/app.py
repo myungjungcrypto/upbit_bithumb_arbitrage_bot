@@ -17,6 +17,8 @@ from .collectors.okx import OkxCollector
 from .collectors.upbit import UpbitCollector
 from .collectors.wallet_binance import BinanceWalletStatusCollector
 from .collectors.wallet_bithumb import BithumbWalletStatusCollector
+from .collectors.wallet_bybit import BybitWalletStatusCollector
+from .collectors.wallet_okx import OkxWalletStatusCollector
 from .collectors.wallet_upbit import UpbitWalletStatusCollector
 from .config import Config
 from .cycle.risk import RiskManager
@@ -55,8 +57,9 @@ async def run(cfg: Config) -> None:
 
     # 유니버스 해석 (국내 KRW 전 종목 ∩ 바이낸스, 실패 시 config 시드 폴백)
     uni = await resolve_universe(cfg)
-    log.info("universe: all=%d upbit=%d bithumb=%d binance=%d",
-             len(uni["all"]), len(uni["upbit"]), len(uni["bithumb"]), len(uni["binance"]))
+    log.info("universe: all=%d upbit=%d bithumb=%d binance=%d bybit=%d okx=%d",
+             len(uni["all"]), len(uni["upbit"]), len(uni["bithumb"]), len(uni["binance"]),
+             len(uni.get("bybit", [])), len(uni.get("okx", [])))
     engine = PremiumEngine(bus, store, cfg, coins=uni["all"])
 
     st = cfg.storage
@@ -200,7 +203,7 @@ async def run(cfg: Config) -> None:
             except asyncio.TimeoutError:
                 continue
             for r in rows:
-                gk = (r["coin"], r["dom_ex"], r["notional_usd"])
+                gk = (r["coin"], r["dom_ex"], r["ovs_ex"], r["notional_usd"])
                 if premium_store_gate(
                     prem_last_stored.get(gk), r["in_net"], r["out_net"], r["ts"],
                     prem_min_change, prem_heartbeat_ms,
@@ -246,7 +249,7 @@ async def run(cfg: Config) -> None:
                     if blocked:
                         alerter.alert(
                             WARN,
-                            f"trap:{coin}:{direction}:{dom_ex}",
+                            f"trap:{coin}:{direction}:{dom_ex}:{r['ovs_ex']}",
                             f"함정 — {coin} {blocked} 중인데 {direction.upper()} 엣지 "
                             f"{net*100:.1f}%. 먹을 수 없는 김프 (T4-①)",
                             cooldown=health_cd,
@@ -254,12 +257,12 @@ async def run(cfg: Config) -> None:
                     elif abs(net) >= 0.10:
                         alerter.alert(
                             WARN,
-                            f"anomaly:{coin}:{direction}:{dom_ex}",
+                            f"anomaly:{coin}:{direction}:{dom_ex}:{r['ovs_ex']}",
                             f"비정상 괴리 — {body} · 지갑 상태 미확인({dom_ex}) — 함정/데이터 이상 확인 필요",
                             cooldown=health_cd,
                         )
                     else:
-                        alerter.alert(INFO, f"edge:{coin}:{direction}:{dom_ex}", body)
+                        alerter.alert(INFO, f"edge:{coin}:{direction}:{dom_ex}:{r['ovs_ex']}", body)
 
     health_cd = float(cfg.alerts.get("health_cooldown_sec", 600))
 
@@ -365,13 +368,13 @@ async def run(cfg: Config) -> None:
             )
 
     # --- 수집기 기동 ---
-    # 국내·바이낸스는 해석된 유니버스, 바이비트·OKX는 시드 코인만 (P0: 김프 기준은 binance)
+    # 전 거래소가 해석된 유니버스 사용 — 해외는 각 거래소 상장분과의 교집합 (M1 다변화)
     per_exchange_coins = {
         "upbit": uni["upbit"],
         "bithumb": uni["bithumb"],
         "binance": uni["binance"],
-        "bybit": cfg.coins,
-        "okx": cfg.coins,
+        "bybit": uni.get("bybit", cfg.coins),   # M1 해외 다변화 — 시드 → 유니버스 전체
+        "okx": uni.get("okx", cfg.coins),
     }
     collectors = []
     for name in [*cfg.domestic, *cfg.overseas]:
@@ -410,6 +413,26 @@ async def run(cfg: Config) -> None:
         log.info("binance wallet status: ON (V8 사각 해소 — 해외측 게이트 활성)")
     else:
         log.info("binance wallet status: OFF (BINANCE_API_KEY/SECRET 미설정 — V8 사각 존재)")
+    if cfg.okx_api_key and cfg.okx_api_secret and cfg.okx_api_passphrase:
+        wallet_collectors.append(
+            OkxWalletStatusCollector(
+                bus, cfg.okx_api_key, cfg.okx_api_secret, cfg.okx_api_passphrase,
+                float(wcfg.get("okx_poll_sec", 60)),
+            )
+        )
+        log.info("okx wallet status: ON (M1 — OKX 레그 해외측 게이트 활성)")
+    else:
+        log.info("okx wallet status: OFF (OKX_API_KEY/SECRET/PASSPHRASE 미설정 — OKX 레그 V8 사각)")
+    if cfg.bybit_api_key and cfg.bybit_api_secret:
+        wallet_collectors.append(
+            BybitWalletStatusCollector(
+                bus, cfg.bybit_api_key, cfg.bybit_api_secret,
+                float(wcfg.get("bybit_poll_sec", 60)),
+            )
+        )
+        log.info("bybit wallet status: ON (M1 — 바이비트 레그 해외측 게이트 활성)")
+    else:
+        log.info("bybit wallet status: OFF (BYBIT_API_KEY/SECRET 미설정 — 바이비트 레그 V8 사각)")
 
     tasks = [
         *(asyncio.create_task(c.run(stop), name=f"collector.{c.name}") for c in collectors),
@@ -438,7 +461,8 @@ async def run(cfg: Config) -> None:
         INFO,
         "startup",
         f"P0 수집기 기동 — 거래소 {[c.name for c in collectors]}, 유니버스 {len(uni['all'])}개 코인 "
-        f"(업비트 {len(uni['upbit'])} / 빗썸 {len(uni['bithumb'])} / 바이낸스 {len(uni['binance'])})",
+        f"(업비트 {len(uni['upbit'])} / 빗썸 {len(uni['bithumb'])} / 바낸 {len(uni['binance'])}"
+        f" / 바이비트 {len(uni.get('bybit', []))} / OKX {len(uni.get('okx', []))})",
     )
     try:
         await stop.wait()

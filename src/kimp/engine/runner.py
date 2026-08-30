@@ -71,78 +71,76 @@ class PremiumEngine:
         return False
 
     def compute(self, coin: str) -> list[dict]:
+        """(코인, 국내, 해외) 3중 조합별 김프 행 산출 — M1 해외 다변화 (바낸·바이비트·OKX)."""
         stale_ms = self.cfg.book_stale_ms
-        ovs = self.store.fresh(self.cfg.overseas_ref, coin, "USDT", stale_ms)
-        if ovs is None:
-            return []
-
-        fx_ok = self.fx_rate is not None and now_ms() - self.fx_ts <= self.cfg.fx_stale_ms
-
-        rows: list[dict] = []
         ts = now_ms()
+        fx_ok = self.fx_rate is not None and ts - self.fx_ts <= self.cfg.fx_stale_ms
+        rows: list[dict] = []
         for dom_ex in self.cfg.domestic:
             dom = self.store.fresh(dom_ex, coin, "KRW", stale_ms)
             usdt = self.store.fresh(dom_ex, "USDT", "KRW", stale_ms)
             if dom is None or usdt is None:
                 continue
-
-            theo = theo_premium(dom, ovs, self.fx_rate) if fx_ok else None
-            execp = exec_premium(dom, ovs, usdt)
-            usdt_mid = usdt.mid
-
-            fee_dom = self.cfg.taker_fee(dom_ex)
-            fee_ovs = self.cfg.taker_fee(self.cfg.overseas_ref)
-            # 왕복 3-레그: 해외 1회 + 국내 2회 (코인 레그 + USDT 복귀 레그)
-            fee_total = fee_ovs + fee_dom * 2
-            wd_cost_usd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
-            # OUT은 국내 코인 출금에 정률 수수료 추가 (빗썸 알트 ~1% — 운용자 실측)
-            out_wd_pct = self.cfg.withdraw_fee_pct(dom_ex, coin)
-
-            # capacity: 임계 순엣지를 유지하는 최대 명목 (§1.4 사이징 자동화)
-            thr = self._edge_threshold
-            usdt_mid_now = usdt.mid
-
-            def in_net(n: Decimal) -> Decimal | None:
-                g = inbound_gross_edge(ovs, dom, usdt, n)
-                return None if g is None else g - fee_total - wd_cost_usd / n
-
-            def out_net(n_usd: Decimal) -> Decimal | None:
-                if usdt_mid_now is None or usdt_mid_now <= 0:
-                    return None
-                g = outbound_gross_edge(dom, ovs, usdt, n_usd * usdt_mid_now)
-                return None if g is None else g - fee_total - out_wd_pct - wd_cost_usd / n_usd
-
-            in_cap = capacity_at_threshold(in_net, thr)
-            out_cap = capacity_at_threshold(out_net, thr)
-
-            for notional_usd in self.cfg.ladder_usd:
-                if usdt_mid is None or usdt_mid <= 0:
+            for ovs_ex in self.cfg.overseas:
+                ovs = self.store.fresh(ovs_ex, coin, "USDT", stale_ms)
+                if ovs is None:
                     continue
-                notional_krw = notional_usd * usdt_mid
-                in_gross = inbound_gross_edge(ovs, dom, usdt, notional_usd)
-                out_gross = outbound_gross_edge(dom, ovs, usdt, notional_krw)
-                wd_ratio = wd_cost_usd / notional_usd
-                rows.append(
-                    {
-                        "ts": ts,
-                        "coin": coin,
-                        "dom_ex": dom_ex,
-                        "ovs_ex": self.cfg.overseas_ref,
-                        "notional_usd": float(notional_usd),
-                        "theo_mid": _f(theo),
-                        "exec_mid": _f(execp),
-                        "usdtkrw_mid": _f(usdt_mid),
-                        "fx_usdkrw": _f(self.fx_rate) if fx_ok else None,
-                        "in_gross": _f(in_gross),
-                        "in_net": _f(in_gross - fee_total - wd_ratio) if in_gross is not None else None,
-                        "out_gross": _f(out_gross),
-                        "out_net": _f(out_gross - fee_total - out_wd_pct - wd_ratio) if out_gross is not None else None,
-                        "dom_ts_lag_ms": ts - dom.ts_local,
-                        "ovs_ts_lag_ms": ts - ovs.ts_local,
-                        "in_capacity_usd": _f(in_cap),
-                        "out_capacity_usd": _f(out_cap),
-                    }
-                )
+                rows.extend(self._pair_rows(coin, dom_ex, dom, usdt, ovs_ex, ovs, ts, fx_ok))
+        return rows
+
+    def _pair_rows(self, coin, dom_ex, dom, usdt, ovs_ex, ovs, ts, fx_ok) -> list[dict]:
+        theo = theo_premium(dom, ovs, self.fx_rate) if fx_ok else None
+        execp = exec_premium(dom, ovs, usdt)
+        usdt_mid = usdt.mid
+        if usdt_mid is None or usdt_mid <= 0:
+            return []
+
+        fee_dom = self.cfg.taker_fee(dom_ex)
+        fee_ovs = self.cfg.taker_fee(ovs_ex)
+        # 왕복 3-레그: 해외 1회 + 국내 2회 (코인 레그 + USDT 복귀 레그)
+        fee_total = fee_ovs + fee_dom * 2
+        wd_cost_usd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
+        # OUT은 국내 코인 출금에 정률 수수료 추가 (빗썸 알트 ~1% — 운용자 실측)
+        out_wd_pct = self.cfg.withdraw_fee_pct(dom_ex, coin)
+        thr = self._edge_threshold
+
+        def in_net(n: Decimal) -> Decimal | None:
+            g = inbound_gross_edge(ovs, dom, usdt, n)
+            return None if g is None else g - fee_total - wd_cost_usd / n
+
+        def out_net(n_usd: Decimal) -> Decimal | None:
+            g = outbound_gross_edge(dom, ovs, usdt, n_usd * usdt_mid)
+            return None if g is None else g - fee_total - out_wd_pct - wd_cost_usd / n_usd
+
+        in_cap = capacity_at_threshold(in_net, thr)
+        out_cap = capacity_at_threshold(out_net, thr)
+
+        rows = []
+        for notional_usd in self.cfg.ladder_usd:
+            in_gross = inbound_gross_edge(ovs, dom, usdt, notional_usd)
+            out_gross = outbound_gross_edge(dom, ovs, usdt, notional_usd * usdt_mid)
+            wd_ratio = wd_cost_usd / notional_usd
+            rows.append(
+                {
+                    "ts": ts,
+                    "coin": coin,
+                    "dom_ex": dom_ex,
+                    "ovs_ex": ovs_ex,
+                    "notional_usd": float(notional_usd),
+                    "theo_mid": _f(theo),
+                    "exec_mid": _f(execp),
+                    "usdtkrw_mid": _f(usdt_mid),
+                    "fx_usdkrw": _f(self.fx_rate) if fx_ok else None,
+                    "in_gross": _f(in_gross),
+                    "in_net": _f(in_gross - fee_total - wd_ratio) if in_gross is not None else None,
+                    "out_gross": _f(out_gross),
+                    "out_net": _f(out_gross - fee_total - out_wd_pct - wd_ratio) if out_gross is not None else None,
+                    "dom_ts_lag_ms": ts - dom.ts_local,
+                    "ovs_ts_lag_ms": ts - ovs.ts_local,
+                    "in_capacity_usd": _f(in_cap),
+                    "out_capacity_usd": _f(out_cap),
+                }
+            )
         return rows
 
 

@@ -110,8 +110,8 @@ class PaperEngine:
     def _transfer_sec(self, coin: str) -> float:
         return float(self.transfer_min.get(coin, self.transfer_min.get("default", 15))) * 60
 
-    def _fees(self, kind: str, coin: str, dom_ex: str, notional: Decimal) -> Decimal:
-        fee_ratio = self.cfg.taker_fee(self.cfg.overseas_ref) + self.cfg.taker_fee(dom_ex) * 2
+    def _fees(self, kind: str, coin: str, dom_ex: str, ovs_ex: str, notional: Decimal) -> Decimal:
+        fee_ratio = self.cfg.taker_fee(ovs_ex) + self.cfg.taker_fee(dom_ex) * 2
         wd = self.cfg.withdraw_fee_usd(coin) + self.cfg.withdraw_fee_usd("USDT")
         if kind == "out":  # 국내 코인 출금 정률 수수료 (빗썸 알트 ~1% — 운용자 실측 2026-08-28)
             wd += notional * self.cfg.withdraw_fee_pct(dom_ex, coin)
@@ -206,7 +206,7 @@ class PaperEngine:
             if self._try_settle(c):
                 return
             await asyncio.sleep(60)  # 도착 시 호가 스테일/깊이 부족 → 재시도 (T4 플레이북: 투매 금지)
-        self._finalize(c, pnl=-float(self._fees(c.kind, c.coin, c.dom_ex, c.notional_usd)),
+        self._finalize(c, pnl=-float(self._fees(c.kind, c.coin, c.dom_ex, c.ovs_ex, c.notional_usd)),
                        state=SETTLED_STUCK, note="도착 후 6회 재시도에도 정산 불가 — 수수료만 손실 처리")
 
     def _try_settle(self, c: Cycle) -> bool:
@@ -237,7 +237,7 @@ class PaperEngine:
                     return False
                 usdt_got, _ = s
                 gross = usdt_got - c.notional_usd
-        pnl = float(gross - self._fees(c.kind, c.coin, c.dom_ex, c.notional_usd))
+        pnl = float(gross - self._fees(c.kind, c.coin, c.dom_ex, c.ovs_ex, c.notional_usd))
         c.stamp(ARRIVED)
         self._finalize(c, pnl=pnl, state=SETTLED)
         return True
@@ -311,10 +311,17 @@ class PaperEngine:
                 rows = await asyncio.wait_for(q.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
-            for r in rows:
+            # 같은 틱 배치 안에서 최고 엣지 레그가 먼저 슬롯을 잡게 정렬 (M1 — 해외 3곳이
+            # 같은 김프를 동시에 보이므로, config 나열 순서가 아니라 엣지가 거래소를 고른다)
+            for r in sorted(rows, key=_best_edge, reverse=True):
                 try:
                     self.consider(r)
                 except Exception:
                     log.exception("consider failed: %s", r.get("coin"))
         for t in list(self._tasks):
             t.cancel()
+
+
+def _best_edge(r: dict) -> float:
+    vals = [v for v in (r.get("in_net"), r.get("out_net")) if v is not None]
+    return max(vals) if vals else float("-inf")
