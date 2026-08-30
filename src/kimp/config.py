@@ -113,6 +113,23 @@ class Config:
     def bybit_api_secret(self) -> str:
         return os.environ.get("BYBIT_API_SECRET", "")
 
+    # 거래(주문) 전용 키 — 조회 키와 분리 (§4.1 키 3계층). 출금 권한 금지
+    @property
+    def okx_trade_keys(self) -> tuple[str, str, str]:
+        return (os.environ.get("OKX_TRADE_API_KEY", ""),
+                os.environ.get("OKX_TRADE_API_SECRET", ""),
+                os.environ.get("OKX_TRADE_API_PASSPHRASE", ""))
+
+    @property
+    def upbit_trade_keys(self) -> tuple[str, str]:
+        return (os.environ.get("UPBIT_TRADE_ACCESS_KEY", ""),
+                os.environ.get("UPBIT_TRADE_SECRET_KEY", ""))
+
+    @property
+    def bithumb_trade_keys(self) -> tuple[str, str]:
+        return (os.environ.get("BITHUMB_TRADE_API_KEY", ""),
+                os.environ.get("BITHUMB_TRADE_API_SECRET", ""))
+
     @property
     def telegram_token(self) -> str:
         return os.environ.get("TELEGRAM_BOT_TOKEN", "")

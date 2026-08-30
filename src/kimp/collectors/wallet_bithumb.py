@@ -27,17 +27,25 @@ PUBLIC_URL = "https://api.bithumb.com/public/assetsstatus/ALL"
 V1_URL = "https://api.bithumb.com/v1/status/wallet"
 
 
-def make_bithumb_jwt(access_key: str, secret_key: str) -> str:
-    """빗썸 2.0 인증 JWT (HS256) — 업비트와 동일 구조 + timestamp 필드."""
+def make_bithumb_jwt(access_key: str, secret_key: str, params: dict | None = None) -> str:
+    """빗썸 2.0 인증 JWT (HS256) — 업비트와 동일 구조 + timestamp 필드.
+    params가 있으면 query_hash(SHA512) 포함 — 주문 API용."""
     def b64(b: bytes) -> bytes:
         return base64.urlsafe_b64encode(b).rstrip(b"=")
 
-    header = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = b64(json.dumps({
+    body: dict = {
         "access_key": access_key,
         "nonce": str(uuid.uuid4()),
         "timestamp": int(time.time() * 1000),
-    }).encode())
+    }
+    if params:
+        import urllib.parse
+
+        query = urllib.parse.urlencode(params, doseq=True)
+        body["query_hash"] = hashlib.sha512(query.encode()).hexdigest()
+        body["query_hash_alg"] = "SHA512"
+    header = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = b64(json.dumps(body).encode())
     signing = header + b"." + payload
     sig = b64(hmac.new(secret_key.encode(), signing, hashlib.sha256).digest())
     return (signing + b"." + sig).decode()

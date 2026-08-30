@@ -28,12 +28,18 @@ def _b64url(data: bytes) -> bytes:
     return base64.urlsafe_b64encode(data).rstrip(b"=")
 
 
-def make_jwt(access_key: str, secret_key: str) -> str:
-    """업비트 인증용 JWT (HS256, 파라미터 없는 요청). 외부 의존성 없이 stdlib로 생성."""
+def make_jwt(access_key: str, secret_key: str, params: dict | None = None) -> str:
+    """업비트 인증용 JWT (HS256). params가 있으면 query_hash(SHA512) 포함 — 주문 API용.
+    외부 의존성 없이 stdlib로 생성."""
+    body: dict = {"access_key": access_key, "nonce": str(uuid.uuid4())}
+    if params:
+        import urllib.parse
+
+        query = urllib.parse.urlencode(params, doseq=True)
+        body["query_hash"] = hashlib.sha512(query.encode()).hexdigest()
+        body["query_hash_alg"] = "SHA512"
     header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
-    payload = _b64url(
-        json.dumps({"access_key": access_key, "nonce": str(uuid.uuid4())}).encode()
-    )
+    payload = _b64url(json.dumps(body).encode())
     signing_input = header + b"." + payload
     sig = _b64url(hmac.new(secret_key.encode(), signing_input, hashlib.sha256).digest())
     return (signing_input + b"." + sig).decode()
