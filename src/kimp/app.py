@@ -6,6 +6,7 @@ import logging
 import signal
 from pathlib import Path
 
+from .alerts.control import TelegramControl
 from .alerts.telegram import CRIT, INFO, WARN, Alerter
 from .bus import Bus
 from .collectors.binance import BinanceCollector
@@ -139,6 +140,29 @@ async def run(cfg: Config) -> None:
     cycle_store = CycleStore(Path(root) / "cycles.db")
     paper = PaperEngine(bus, store, cycle_store, risk, alerter, wallet_state, cfg, writers["paper_cycles"])
     log.info("paper trading: %s", "ON" if paper.enabled else "OFF")
+
+    # --- 텔레그램 관제탑 (양방향): /status /stop /resume + 출금 승인 버튼 (§1.3, §4.1) ---
+    control = TelegramControl(cfg.telegram_token, cfg.telegram_chat_id)
+
+    def _status_text() -> str:
+        open_n = len(risk.open_notional)
+        return (f"상태: 수집 {'정상' if not risk.halted else '가동'} · PAPER 진행 {open_n}건 · "
+                f"오늘 ${risk.daily_pnl:,.2f}" + (f"\n⚠️ L1: {risk.halted}" if risk.halted else ""))
+
+    def _stop() -> str:
+        risk.halted = "수동 L1 (텔레그램 /stop)"
+        return "🛑 L1 발동 — 신규 진입 차단. 진행 중 사이클은 완주합니다. 해제: /resume"
+
+    def _resume() -> str:
+        risk.halted = None
+        risk.consecutive_failures = 0
+        return "▶️ L1 해제 — 신규 진입 재개"
+
+    control.on_command("/status", _status_text)
+    control.on_command("/stop", _stop)
+    control.on_command("/resume", _resume)
+    if control.live:
+        log.info("telegram control tower: ON (/status /stop /resume + 승인 버튼)")
 
     prem_min_change = float(st.get("premium_min_change", 0.0005))
     prem_heartbeat_ms = int(st.get("premium_heartbeat_ms", 10000))
@@ -383,6 +407,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
         asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),
+        asyncio.create_task(control.run(stop), name="telegram.control"),
     ]
 
     alerter.alert(

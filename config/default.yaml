@@ -113,3 +113,12 @@ paper:
     hourly_entries: 10
     daily_loss_limit_usd: 300
     max_consecutive_failures: 3
+
+# 출금 게이트웨이 (§4.1 방어선 3~5) — P3에서 Live 백엔드로 전환, 그 전까지 정책·승인 UX 검증
+withdrawals:
+  mode: supervised           # supervised = 전 건 텔레그램 승인 (P3 초기 확정값)
+  per_tx_usd_cap: 3000
+  daily_usd_cap: 10000
+  approval_timeout_sec: 600  # 무응답 = 거부
+  allowlist: []              # P3 전 기입: [{coin: ONG, from: bithumb, to: binance, address: "..."}]
+                             # 거래소단 화이트리스트(방어선 1)와 1:1 이중 잠금
