@@ -53,6 +53,7 @@ fees:
 withdraw_fee_pct:
   bithumb:
     default: 0.01
+    USDT: 0.0                # USDT 레일은 정액 (withdraw_fee_usd_est로 반영) — 리밸런싱 비용 과대평가 방지
   upbit:
     default: 0.0             # 업비트는 정액 위주 — 코인별 실값 확인 후 갱신
 
@@ -116,6 +117,16 @@ paper:
     hourly_entries: 10
     daily_loss_limit_usd: 300
     max_consecutive_failures: 3
+  inventory:                 # §1.5 재고 선배치형 페이퍼 (M3ⓐ) — T18 확정: 거래소당 $5k, 가격 노출 감수
+    enabled: true
+    venues_usd: {upbit: 5000, bithumb: 5000, binance: 5000, bybit: 5000, okx: 5000}
+    coins: [PROM, ONG]       # 재고를 둘 코인 (검증 레그에서만 실행됨 — verify 재실행 후 유효)
+    dom_base_pct: 0.5        # 국내 배분 중 코인 재고 비율 (IN=국내 매도가 주 방향이라 높게)
+    ovs_base_pct: 0.2        # 해외 배분 중 코인 재고 비율 (OUT 대비 소량)
+    band_pct: 0.5            # 목표 −50%에서 진입 차단, −25%(밴드 절반)에서 리밸런싱 시뮬 발동
+    slice_usd: 500           # 조각당 명목 (인계서 §2.10 — 얕은 호가 보호)
+    slice_interval_sec: 5    # 같은 레그 재조각 최소 간격 (새 스냅샷 요구의 근사)
+    entry_threshold: 0.005   # 순엣지(출금비 제외 — 재고 모드는 사이클에 전송이 없음) 임계
 
 # 출금 게이트웨이 (§4.1 방어선 3~5) — P3에서 Live 백엔드로 전환, 그 전까지 정책·승인 UX 검증
 withdrawals:

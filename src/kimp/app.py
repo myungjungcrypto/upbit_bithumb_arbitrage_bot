@@ -26,6 +26,7 @@ from .cycle.store import CycleStore
 from .engine.books import BookStore
 from .engine.runner import PremiumEngine
 from .paper.engine import PaperEngine
+from .paper.inventory import InventoryEngine
 from .symbols import leg_blocked
 from .storage.parquet import (
     BufferedParquetWriter,
@@ -144,6 +145,10 @@ async def run(cfg: Config) -> None:
     cycle_store = CycleStore(Path(root) / "cycles.db")
     paper = PaperEngine(bus, store, cycle_store, risk, alerter, wallet_state, cfg, writers["paper_cycles"])
     log.info("paper trading: %s", "ON" if paper.enabled else "OFF")
+    # §1.5 재고 선배치형 병행 측정 (M3ⓐ) — TRANSFER 모드와 같은 기회를 다른 방식으로 집계
+    inv = InventoryEngine(bus, store, cycle_store, alerter, wallet_state, cfg, writers["paper_cycles"],
+                          paper.blocklist, paper.verified_ok)
+    log.info("inventory paper: %s", "ON" if inv.enabled else "OFF (paper.inventory.coins 비어있거나 disabled)")
 
     def _today_start_ms() -> int:
         from datetime import datetime as _dt, timezone as _tz
@@ -183,6 +188,8 @@ async def run(cfg: Config) -> None:
         ]
         if top:
             lines.append("상위: " + ", ".join(f"{c} ${p:+,.0f}" for c, p in top))
+        if inv.enabled:
+            lines.append(inv.summary_line(_today_start_ms()))
         return "\n".join(lines)
 
     control.on_command("/status", _status_text)
@@ -357,9 +364,10 @@ async def run(cfg: Config) -> None:
             counts = {c.name: c.msg_count for c in collectors}
             open_n = len(risk.open_notional)
             log.info(
-                "status: msgs=%s dropped=%s rss=%.0fMB paper(open=%d, today=$%.2f%s)",
+                "status: msgs=%s dropped=%s rss=%.0fMB paper(open=%d, today=$%.2f%s)%s",
                 counts, dict(bus.dropped), _rss_mb(), open_n, risk.daily_pnl,
                 f", L1:{risk.halted}" if risk.halted else "",
+                f" | {inv.summary_line(_today_start_ms())}" if inv.enabled else "",
             )
             alerter.alert(
                 INFO, "heartbeat",
@@ -452,6 +460,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(status_reporter(), name="status"),
         asyncio.create_task(retention_janitor(), name="retention"),
         asyncio.create_task(paper.run(stop), name="paper"),
+        asyncio.create_task(inv.run(stop), name="paper.inventory"),
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
         asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),
