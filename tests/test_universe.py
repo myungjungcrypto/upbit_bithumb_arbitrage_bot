@@ -69,6 +69,27 @@ def test_stables_never_in_universe():
     assert uni["all"] == ["BTC"]
 
 
+def test_overseas_union_covers_non_binance_listings():
+    """M1: 바낸 미상장이라도 바이비트/OKX 상장이면 유니버스에 든다 (해외 필터 = 합집합)."""
+    uni = build_universe(
+        seed=[],
+        upbit_bases={"BTC", "OKXONLY", "NOWHERE"},
+        bithumb_bases=set(),
+        binance_bases={"BTC"},
+        turnover={},
+        max_coins=150,
+        include=[],
+        exclude=[],
+        bybit_bases={"BTC"},
+        okx_bases={"OKXONLY"},
+    )
+    assert set(uni["all"]) == {"BTC", "OKXONLY"}   # NOWHERE(해외 전무)만 제외
+    assert uni["upbit"] == ["BTC", "OKXONLY"]
+    assert uni["okx"] == ["OKXONLY"]
+    assert uni["binance"] == ["BTC"]               # 바낸엔 미상장 코인 구독 안 함
+    assert uni["bybit"] == ["BTC"]
+
+
 def test_multi_overseas_lists_are_universe_intersections():
     """M1: bybit/okx 구독 목록 = 유니버스 ∩ 각 거래소 상장분, 조회 실패 시 시드 폴백."""
     uni = build_universe(

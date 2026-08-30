@@ -1,4 +1,4 @@
-"""거래 유니버스 자동 해석 — 국내 KRW 전 종목 ∩ 바이낸스 USDT (T3).
+"""거래 유니버스 자동 해석 — 국내 KRW 전 종목 ∩ (바낸∪바이비트∪OKX) USDT (T3, M1).
 
 원칙: 수집은 넓게, 실행 후보는 P1 실측이 뽑는다. 모든 원격 조회는 실패 시
 config 시드(coins)로 폴백한다 — 유니버스 조회 실패가 수집기를 막으면 안 된다.
@@ -97,13 +97,16 @@ def build_universe(
     bybit_bases: set[str] | None = None,
     okx_bases: set[str] | None = None,
 ) -> dict[str, list[str]]:
-    """순수 함수 (테스트 대상). 반환: {"upbit": [...], "bithumb": [...], "binance": [...], "all": [...]}"""
+    """순수 함수 (테스트 대상). 반환: 거래소별 구독 목록 + "all"."""
     banned = STABLES | set(exclude)
 
     def clean(bases: set[str]) -> set[str]:
         return {b for b in bases if b not in banned}
 
-    ovs = clean(binance_bases) if binance_bases is not None else None
+    # M1: 해외 필터 = 바낸 ∪ 바이비트 ∪ OKX (조회 성공분의 합집합) — 바낸 미상장이라도
+    # 다른 해외 거래소에 있으면 레그가 성립한다 (저시총 원화 알트가 정확히 이 영역)
+    ovs_sets = [clean(b) for b in (binance_bases, bybit_bases, okx_bases) if b is not None]
+    ovs = set().union(*ovs_sets) if ovs_sets else None
 
     def domestic(dom_bases: set[str] | None) -> set[str]:
         if dom_bases is None:
@@ -113,7 +116,7 @@ def build_universe(
         if ovs is not None:
             cand &= ovs
         elif dom_bases is not None:
-            # 바이낸스 목록 실패 시 시드로 제한 (해외에 없는 코인 구독 방지)
+            # 해외 목록 전부 실패 시 시드로 제한 (해외에 없는 코인 구독 방지)
             cand &= set(seed)
         return cand
 
@@ -140,7 +143,7 @@ def build_universe(
     return {
         "upbit": sorted(up),
         "bithumb": sorted(bt),
-        "binance": sorted(allc if ovs is None else (allc & ovs)),
+        "binance": ovs_list(binance_bases),
         "bybit": ovs_list(bybit_bases),
         "okx": ovs_list(okx_bases),
         "all": sorted(allc),
