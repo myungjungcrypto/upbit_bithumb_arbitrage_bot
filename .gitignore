@@ -3,6 +3,9 @@
 *.key
 secrets/
 
+# 서버 전용 설정 오버레이 (실거래 모드·라우트·출금 주소)
+config/local.yaml
+
 # data
 data/
 *.parquet

@@ -160,6 +160,23 @@ class Config:
         return bool(self.raw.get("telegram", {}).get("enabled", True)) and bool(self.telegram_token)
 
 
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
 def load_config(path: str | Path) -> Config:
+    """default.yaml 로드 + 같은 폴더의 local.yaml(있으면)을 깊은 병합으로 덮어쓴다.
+
+    local.yaml은 gitignore — 서버 전용 값(execution 모드·라우트, withdrawals.allowlist 주소 등)을
+    저장소 밖에 두어 git pull 충돌 없이 운용한다. 리스트는 통째로 교체, dict는 키 단위 병합."""
+    path = Path(path)
     with open(path, "r", encoding="utf-8") as f:
-        return Config(raw=yaml.safe_load(f) or {})
+        raw = yaml.safe_load(f) or {}
+    local = path.with_name("local.yaml")
+    if local.exists():
+        with open(local, "r", encoding="utf-8") as f:
+            raw = _deep_merge(raw, yaml.safe_load(f) or {})
+    return Config(raw=raw)
