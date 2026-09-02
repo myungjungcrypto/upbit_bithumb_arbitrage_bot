@@ -70,9 +70,12 @@ def test_binance_two_step_withdraw_calls_sub_to_master_first(monkeypatch):
     be._binance_sub_to_master = fake_sub_to_master
     # 이체 후 실제 출금 HTTP는 네트워크라 여기서 끊는다 — 순서만 검증
     class Boom(Exception): ...
-    async def fake_post(*a, **k): raise Boom()
-    class FakeSess:
-        post = staticmethod(fake_post)
+    class FakeSess:  # aiohttp의 post()는 async context manager — 진입 시 Boom
+        def post(self, *a, **k):
+            class _Cm:
+                async def __aenter__(self): raise Boom()
+                async def __aexit__(self, *e): return False
+            return _Cm()
     with pytest.raises(Boom):
         asyncio.run(be._binance(FakeSess(), "PROM", D("9.9"), "addr", "ETH", ""))
     assert calls == [("sub2master", "PROM", D("9.9"))]
