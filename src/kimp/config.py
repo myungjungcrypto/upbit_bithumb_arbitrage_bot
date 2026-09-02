@@ -130,6 +130,23 @@ class Config:
         return (os.environ.get("BITHUMB_TRADE_API_KEY", ""),
                 os.environ.get("BITHUMB_TRADE_API_SECRET", ""))
 
+    # 출금 전용 키 — 게이트웨이 Live 백엔드만 사용 (§4.1 방어선 3: 전략 코드 접근 금지)
+    @property
+    def okx_withdraw_keys(self) -> tuple[str, str, str]:
+        return (os.environ.get("OKX_WITHDRAW_API_KEY", ""),
+                os.environ.get("OKX_WITHDRAW_API_SECRET", ""),
+                os.environ.get("OKX_WITHDRAW_API_PASSPHRASE", ""))
+
+    @property
+    def upbit_withdraw_keys(self) -> tuple[str, str]:
+        return (os.environ.get("UPBIT_WITHDRAW_ACCESS_KEY", ""),
+                os.environ.get("UPBIT_WITHDRAW_SECRET_KEY", ""))
+
+    @property
+    def bithumb_withdraw_keys(self) -> tuple[str, str]:
+        return (os.environ.get("BITHUMB_WITHDRAW_API_KEY", ""),
+                os.environ.get("BITHUMB_WITHDRAW_API_SECRET", ""))
+
     @property
     def telegram_token(self) -> str:
         return os.environ.get("TELEGRAM_BOT_TOKEN", "")

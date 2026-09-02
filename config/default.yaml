@@ -134,5 +134,8 @@ withdrawals:
   per_tx_usd_cap: 3000
   daily_usd_cap: 10000
   approval_timeout_sec: 600  # 무응답 = 거부
-  allowlist: []              # P3 전 기입: [{coin: ONG, from: bithumb, to: binance, address: "..."}]
+  allowlist: []              # P3 전 기입. 항목: {coin, from, to, address, network, memo?, extra?}
+                             #   network = 출발 거래소 표기 (OKX "USDT-TRC20" / 업비트·빗썸 net_type "TRX")
+                             #   extra   = 거래소별 추가 파라미터 (빗썸 트래블룰 필드 등 — V1 실측 후 기입)
+                             # 예: {coin: PROM, from: okx, to: upbit, address: "0x..", network: "PROM-ERC20"}
                              # 거래소단 화이트리스트(방어선 1)와 1:1 이중 잠금

@@ -21,15 +21,17 @@ class FakeBackend:
     def __init__(self):
         self.calls = []
 
-    async def withdraw(self, coin, from_ex, to_ex, amount, address):
+    async def withdraw(self, coin, from_ex, to_ex, amount, address, **route):
         self.calls.append((coin, from_ex, to_ex, amount, address))
+        self.routes = getattr(self, "routes", []) + [route]
         return "TX123"
 
 
 CFG = {
     "mode": "supervised", "per_tx_usd_cap": 3000, "daily_usd_cap": 5000,
     "approval_timeout_sec": 1,
-    "allowlist": [{"coin": "ONG", "from": "bithumb", "to": "binance", "address": "AXyzAddress123456"}],
+    "allowlist": [{"coin": "ONG", "from": "bithumb", "to": "binance", "address": "AXyzAddress123456",
+                   "network": "ONT", "extra": {"exchange_name": "binance"}}],
 }
 
 
@@ -116,4 +118,13 @@ def test_control_approval_callback():
         assert c.handle_update({"callback_query": {
             "message": {"chat": {"id": 666}}, "data": "ap:def:1", "id": "cb2"}}) is None
         assert not fut2.done()
+    asyncio.run(go())
+
+
+def test_gateway_passes_route_details_to_backend():
+    """M3ⓓ: allowlist의 network/memo/extra가 백엔드까지 전달된다 (거래소별 출금 파라미터의 출처)."""
+    gw, be = _gw()
+    async def go():
+        assert await gw.request("ONG", "bithumb", "binance", Decimal(1), Decimal(100), "t") == "TX123"
+        assert be.routes[-1] == {"network": "ONT", "memo": "", "extra": {"exchange_name": "binance"}}
     asyncio.run(go())

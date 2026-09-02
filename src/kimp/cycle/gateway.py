@@ -23,8 +23,9 @@ log = logging.getLogger("gateway")
 class PaperWithdrawBackend:
     """시뮬 백엔드 — 실제 출금 없음. 승인 UX·정책 검증용."""
 
-    async def withdraw(self, coin: str, from_ex: str, to_ex: str, amount: Decimal, address: str) -> str:
-        log.info("[PAPER-WD] %s %s→%s %s (addr=…%s)", coin, from_ex, to_ex, amount, address[-6:])
+    async def withdraw(self, coin: str, from_ex: str, to_ex: str, amount: Decimal, address: str, **route) -> str:
+        log.info("[PAPER-WD] %s %s→%s %s (addr=…%s, net=%s)", coin, from_ex, to_ex, amount, address[-6:],
+                 route.get("network", "-"))
         return "PAPER-TX"
 
 
@@ -37,9 +38,16 @@ class WithdrawalGateway:
         self.per_tx_cap = Decimal(str(cfg.get("per_tx_usd_cap", 3000)))
         self.daily_cap = Decimal(str(cfg.get("daily_usd_cap", 10000)))
         self.approval_timeout = float(cfg.get("approval_timeout_sec", 600))
-        # allowlist: [{coin, from, to, address}] — 공개 주소라 시크릿 아님. 거래소 등록분과 1:1
+        # allowlist: [{coin, from, to, address, network, memo?, extra?}] — 공개 주소라 시크릿 아님.
+        # 거래소 등록분과 1:1. network는 출발 거래소 표기(OKX "USDT-TRC20" / 업비트 net_type),
+        # extra는 거래소별 추가 파라미터(빗썸 트래블룰 필드 등 — V1 실측 후 코드 수정 없이 기입)
         self.allowlist = {
-            (str(e["coin"]).upper(), str(e["from"]).lower(), str(e["to"]).lower()): str(e["address"])
+            (str(e["coin"]).upper(), str(e["from"]).lower(), str(e["to"]).lower()): {
+                "address": str(e["address"]),
+                "network": str(e.get("network", "")),
+                "memo": str(e.get("memo", "")),
+                "extra": dict(e.get("extra") or {}),
+            }
             for e in cfg.get("allowlist", [])
         }
         self._daily_used = Decimal(0)
@@ -62,8 +70,9 @@ class WithdrawalGateway:
 
         self._roll_day()
         key = (coin.upper(), from_ex.lower(), to_ex.lower())
-        address = self.allowlist.get(key)
-        if address is None:
+        entry = self.allowlist.get(key)
+        address = entry["address"] if entry else None
+        if entry is None:
             self.alerter.alert(CRIT, f"gw:deny:{coin}",
                                f"🚫 출금 거부 — 미등록 조합 {coin} {from_ex}→{to_ex} (${usd_value:,.0f}) · {reason}",
                                cooldown=0)
@@ -94,7 +103,10 @@ class WithdrawalGateway:
                 return None
 
         try:
-            txid = await self.backend.withdraw(coin, from_ex, to_ex, amount, address)
+            txid = await self.backend.withdraw(
+                coin, from_ex, to_ex, amount, address,
+                network=entry["network"], memo=entry["memo"], extra=entry["extra"],
+            )
         except Exception as e:
             self.alerter.alert(CRIT, f"gw:fail:{coin}",
                                f"🚨 출금 실행 실패 — {coin} {from_ex}→{to_ex}: {e!r}", cooldown=0)
