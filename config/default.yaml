@@ -9,15 +9,15 @@ universe:
   refresh_sec: 1800    # 신규 KRW 상장 감지 주기 (알림만, 편입은 재시작 시)
   include: []          # 강제 포함
   exclude: []          # 강제 제외 (수집 자체를 안 함)
-  # V7 검증 결과 (verify_universe.py 2026-08-29, 빗썸 net_type 포함 레그별 판정):
-  #  "COIN"=전역 차단(양쪽 레그 불가/충돌), "COIN@거래소"=해당 국내 레그만 차단
-  #  AI=티커 충돌(젠신≠Sleepless AI), 나머지=네트워크 불일치. allowlist(data/verified_ok.json)와 병행:
+  # V7 검증 결과 (verify_universe.py 2026-09-02, 국내 2×해외 3 레그별 · 빗썸 L2 별칭 반영):
+  #  문법 "COIN"=전역 / "COIN@dom"=국내 레그 / "COIN>ovs"=해외 레그 / "COIN@dom>ovs"=특정 조합
+  #  티커 충돌: AI(젠신≠Sleepless AI, 바낸만) · EDGE(Definitive≠edgeX, 바이비트·OKX) — 나머지는 네트워크 불일치
+  #  (마이그레이션: A/EOS→Vaulta, NEO3, CHZ2, SEIEVM, MTL/METAL 등). allowlist(data/verified_ok.json)와 병행:
   #  신규 상장은 verify 재실행 전까지 자동 차단. 재검증: scripts/verify_universe.py
-  trade_blocklist: [AERO@bithumb, AI, ANIME@bithumb, ARB@bithumb, AWE@bithumb, CHIP@bithumb,
-                    CHZ, DOT, G@bithumb, GAS, GMT@bithumb, HOME@bithumb, KAITO@bithumb,
-                    KAT@bithumb, LSK@upbit, MEGA@bithumb, MIRA@bithumb, MOVE, MTL,
-                    OP@bithumb, OPG@bithumb, QKC, SEI@upbit, SIGN@bithumb, SOPH@upbit,
-                    VIRTUAL@bithumb, WCT@bithumb, ZIL, ZK@bithumb]
+  trade_blocklist: [A>binance, AI>binance, CHZ>binance, DOT>binance, DYDX>bybit, EDGE, FET>binance,
+                    G@bithumb>binance, GAS>binance, GMT>binance, GRT>binance, INJ>binance,
+                    LSK@upbit>binance, MBL, METIS>binance, MTL, NEO>binance, ONT>binance, PROS@bithumb,
+                    QKC, SEI@upbit>binance, SOPH@upbit>binance, ZIL>binance]
 
 wallet_status:
   bithumb_poll_sec: 60 # T4 게이트 ① — 빗썸 public 입출금 상태 (그 외는 읽기전용 키 있을 때 자동 기동)
