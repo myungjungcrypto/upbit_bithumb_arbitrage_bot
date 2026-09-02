@@ -126,6 +126,11 @@ class Config:
                 os.environ.get("UPBIT_TRADE_SECRET_KEY", ""))
 
     @property
+    def binance_trade_keys(self) -> tuple[str, str]:
+        return (os.environ.get("BINANCE_TRADE_API_KEY", ""),
+                os.environ.get("BINANCE_TRADE_API_SECRET", ""))
+
+    @property
     def bithumb_trade_keys(self) -> tuple[str, str]:
         return (os.environ.get("BITHUMB_TRADE_API_KEY", ""),
                 os.environ.get("BITHUMB_TRADE_API_SECRET", ""))
@@ -141,6 +146,11 @@ class Config:
     def upbit_withdraw_keys(self) -> tuple[str, str]:
         return (os.environ.get("UPBIT_WITHDRAW_ACCESS_KEY", ""),
                 os.environ.get("UPBIT_WITHDRAW_SECRET_KEY", ""))
+
+    @property
+    def binance_withdraw_keys(self) -> tuple[str, str]:
+        return (os.environ.get("BINANCE_WITHDRAW_API_KEY", ""),
+                os.environ.get("BINANCE_WITHDRAW_API_SECRET", ""))
 
     @property
     def bithumb_withdraw_keys(self) -> tuple[str, str]:

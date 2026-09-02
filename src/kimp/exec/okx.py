@@ -63,7 +63,7 @@ class OkxOrderAdapter(OrderAdapter):
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
-        self._rules: dict[str, tuple[Decimal, Decimal, Decimal]] = {}  # inst → (tick, lot, min_sz)
+        self._rules: dict[str, tuple[Decimal, Decimal, Decimal, Decimal]] = {}  # inst → (tick, lot, min_sz, min_notional)
 
     def _headers(self, method: str, path: str, body: str = "") -> dict:
         ts = okx_timestamp()
@@ -75,8 +75,8 @@ class OkxOrderAdapter(OrderAdapter):
             "Content-Type": "application/json",
         }
 
-    async def instrument_rules(self, sess: aiohttp.ClientSession, base: str, quote: str = "USDT") -> tuple[Decimal, Decimal, Decimal]:
-        """(tick, lot, min_sz) — 공개 API, 캐시. 주문 직전 가격·수량 정규화의 근거 (T7 재검증)."""
+    async def instrument_rules(self, sess: aiohttp.ClientSession, base: str, quote: str = "USDT"):
+        """(tick, lot, min_sz, min_notional=0) — 공개 API, 캐시. 주문 직전 가격·수량 정규화의 근거 (T7 재검증)."""
         inst = f"{base}-{quote}"
         if inst in self._rules:
             return self._rules[inst]
@@ -90,7 +90,7 @@ class OkxOrderAdapter(OrderAdapter):
         if not rows:
             raise OrderError(f"okx instrument 없음: {inst}")
         r = rows[0]
-        rules = (D(r["tickSz"]), D(r["lotSz"]), D(r["minSz"]))
+        rules = (D(r["tickSz"]), D(r["lotSz"]), D(r["minSz"]), D(0))
         self._rules[inst] = rules
         return rules
 

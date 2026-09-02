@@ -15,6 +15,7 @@ from decimal import Decimal
 
 import aiohttp
 
+from ..collectors.wallet_binance import sign_query
 from ..collectors.wallet_bithumb import make_bithumb_jwt
 from ..collectors.wallet_okx import okx_timestamp, sign_okx
 from ..collectors.wallet_upbit import make_jwt
@@ -35,6 +36,13 @@ _OKX_WD = {
 }
 _UPBIT_WD = {"WAITING": "pending", "PROCESSING": "sent", "DONE": "done",
              "FAILED": "failed", "CANCELLED": "failed", "REJECTED": "failed"}
+# 바이낸스 withdraw/history status: 0 Email Sent, 1 Cancelled, 2 Awaiting Approval, 3 Rejected, 4 Processing, 5 Failure, 6 Completed
+_BINANCE_WD = {"0": "pending", "1": "failed", "2": "pending", "3": "failed", "4": "sent", "5": "failed", "6": "done"}
+BINANCE_BASE = "https://api.binance.com"
+
+
+def norm_binance_wd_state(state) -> str:
+    return _BINANCE_WD.get(str(state), "pending")
 
 
 def norm_okx_wd_state(state) -> str:
@@ -86,6 +94,8 @@ class LiveWithdrawBackend:
         async with aiohttp.ClientSession(trust_env=True, headers={"Accept": "application/json"}) as sess:
             if from_ex == "okx":
                 return await self._okx(sess, coin, amount, address, network, memo)
+            if from_ex == "binance":
+                return await self._binance(sess, coin, amount, address, network, memo)
             if from_ex in ("upbit", "bithumb"):
                 return await self._krw(sess, from_ex, coin, amount, address, network, memo, extra)
         raise OrderError(f"출금 백엔드 미지원 거래소: {from_ex}")
@@ -123,6 +133,24 @@ class LiveWithdrawBackend:
             raise OrderError(f"OKX 출금 거부: {data.get('msg')} (code={data.get('code')})")
         return str(rows[0].get("wdId"))
 
+    async def _binance(self, sess, coin, amount, address, network, memo) -> str:
+        """POST /sapi/v1/capital/withdraw/apply — 마스터 계정 출금 전용 키. 주소 화이트리스트 ON이면 미등록 주소는
+        거래소가 거부한다(방어선 1). network는 바낸 코드("ETH"/"BSC"…). 서브계좌 2단 출금(이체→출금)은 M4."""
+        ak, sk = self.cfg.binance_withdraw_keys
+        if not (ak and sk):
+            raise OrderError("바이낸스 출금 키 미설정 (BINANCE_WITHDRAW_*)")
+        params = {"coin": coin, "network": network, "address": address, "amount": str(amount),
+                  "walletType": 0, "timestamp": int(__import__("time").time() * 1000), "recvWindow": 10000}
+        if memo:
+            params["addressTag"] = memo
+        qs = sign_query(sk, params)
+        async with sess.post(f"{BINANCE_BASE}/sapi/v1/capital/withdraw/apply?{qs}", headers={"X-MBX-APIKEY": ak},
+                             timeout=aiohttp.ClientTimeout(total=15)) as r:
+            data = await r.json(content_type=None)
+            if r.status >= 400 or not isinstance(data, dict) or "id" not in data:
+                raise OrderError(f"바이낸스 출금 거부: {data}")
+        return str(data["id"])
+
     async def _krw(self, sess, ex, coin, amount, address, network, memo, extra) -> str:
         if ex == "upbit":
             ak, sk = self.cfg.upbit_withdraw_keys
@@ -159,6 +187,16 @@ class LiveWithdrawBackend:
                     if not rows:
                         return "pending", ""
                     return norm_okx_wd_state(rows[0].get("state")), str(rows[0].get("txId") or "")
+                if from_ex == "binance":
+                    ak, sk = self.cfg.binance_withdraw_keys
+                    qs = sign_query(sk, {"coin": coin, "timestamp": int(__import__("time").time() * 1000), "recvWindow": 10000})
+                    async with sess.get(f"{BINANCE_BASE}/sapi/v1/capital/withdraw/history?{qs}", headers={"X-MBX-APIKEY": ak},
+                                        timeout=aiohttp.ClientTimeout(total=10)) as r:
+                        data = await r.json(content_type=None)
+                    for row in data if isinstance(data, list) else []:
+                        if str(row.get("id")) == str(wd_id):
+                            return norm_binance_wd_state(row.get("status")), str(row.get("txId") or "")
+                    return "pending", ""
                 ak, sk = self.cfg.upbit_withdraw_keys if from_ex == "upbit" else self.cfg.bithumb_withdraw_keys
                 base = UPBIT_BASE if from_ex == "upbit" else BITHUMB_BASE
                 jwt = make_jwt if from_ex == "upbit" else make_bithumb_jwt

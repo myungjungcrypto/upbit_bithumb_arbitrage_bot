@@ -48,7 +48,7 @@ class SimOrderAdapter(OrderAdapter):
         self._orders: dict[str, OrderResult] = {}
 
     async def instrument_rules(self, sess, base, quote="USDT"):
-        return D("0.0001"), D("0.0001"), D("1")
+        return D("0.0001"), D("0.0001"), D("1"), D("5")
 
     async def place_ioc(self, sess, side, base, quote, price, qty, client_id) -> OrderResult:
         fee = qty * self.fee_rate if side == "buy" else qty * price * self.fee_rate
@@ -189,8 +189,8 @@ class LiveCycleRunner:
         if ex in DOMESTIC:
             table = UPBIT_KRW_TICKS if ex == "upbit" else BITHUMB_KRW_TICKS
             return krw_tick(price, table), QTY_STEP_KRW, MIN_NOTIONAL_KRW
-        tick, lot, min_sz = await self.adapters[ex].instrument_rules(self._sess, coin, quote)
-        return tick, lot, min_sz * price  # 해외 min은 수량 기준 → 명목으로 환산
+        tick, lot, min_qty, min_notional = await self.adapters[ex].instrument_rules(self._sess, coin, quote)
+        return tick, lot, max(min_notional, min_qty * price)  # 해외: 수량 하한·명목 하한 중 큰 쪽
 
     async def _place_with_recovery(self, ex, side, coin, quote, price, qty, client_id) -> OrderResult:
         """발사 → timeout이면 재주문 없이 client_id로 조회 (최대 3회). 그래도 불명이면 unknown 반환."""

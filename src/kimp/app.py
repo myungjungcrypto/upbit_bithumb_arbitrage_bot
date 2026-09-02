@@ -27,6 +27,7 @@ from .engine.books import BookStore
 from .engine.runner import PremiumEngine
 from .cycle.gateway import PaperWithdrawBackend, WithdrawalGateway
 from .exec.base import live_allowed
+from .exec.binance import BinanceOrderAdapter
 from .exec.bithumb import BithumbOrderAdapter
 from .exec.deposits import DepositWatcher
 from .exec.journal import ExecutionJournal
@@ -218,7 +219,9 @@ async def run(cfg: Config) -> None:
         ok_k, ok_s, ok_p = cfg.okx_trade_keys
         up_k, up_s = cfg.upbit_trade_keys
         bt_k, bt_s = cfg.bithumb_trade_keys
+        bn_k, bn_s = cfg.binance_trade_keys
         adapters = {"okx": OkxOrderAdapter(ok_k, ok_s, ok_p, allow_live=True),
+                    "binance": BinanceOrderAdapter(bn_k, bn_s, allow_live=True),
                     "upbit": UpbitOrderAdapter(up_k, up_s, allow_live=True),
                     "bithumb": BithumbOrderAdapter(bt_k, bt_s, allow_live=True)}
         watcher = DepositWatcher(cfg)

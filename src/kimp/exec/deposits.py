@@ -12,6 +12,9 @@ from decimal import Decimal
 
 import aiohttp
 
+import time
+
+from ..collectors.wallet_binance import sign_query
 from ..collectors.wallet_bithumb import make_bithumb_jwt
 from ..collectors.wallet_okx import okx_timestamp, sign_okx
 from ..collectors.wallet_upbit import make_jwt
@@ -20,7 +23,8 @@ from ..config import Config
 log = logging.getLogger("deposits")
 
 # 거래소별 '트레이딩 가능한 입금 완료' 상태 (OKX 1=credited, 2=successful / 국내 ACCEPTED)
-ACCEPTED = {"okx": {"1", "2"}, "upbit": {"ACCEPTED"}, "bithumb": {"ACCEPTED"}}
+# 바이낸스 deposit/hisrec status: 0 pending, 6 credited(출금 불가, 거래 가능), 1 success
+ACCEPTED = {"okx": {"1", "2"}, "upbit": {"ACCEPTED"}, "bithumb": {"ACCEPTED"}, "binance": {"1", "6"}}
 
 
 def deposit_id(row: dict) -> str:
@@ -47,7 +51,7 @@ def match_new_deposit(before_ids: set[str], rows: list[dict], exchange: str, coi
         ccy = str(r.get("ccy") or r.get("currency") or coin).upper()
         if ccy != coin.upper():
             continue
-        st = str(r.get("state", ""))
+        st = str(r.get("state", r.get("status", "")))  # OKX/국내=state, 바이낸스=status
         if st not in ok_states and st.upper() not in ok_states:
             continue
         amt = deposit_amount(r)
@@ -72,6 +76,12 @@ class DepositWatcher:
             async with sess.get(f"https://www.okx.com{path}", headers=h, timeout=aiohttp.ClientTimeout(total=10)) as r:
                 data = await r.json(content_type=None)
             return list((data or {}).get("data") or [])
+        if exchange == "binance":
+            qs = sign_query(self.cfg.binance_api_secret, {"coin": coin, "timestamp": int(time.time() * 1000), "recvWindow": 10000})
+            async with sess.get(f"https://api.binance.com/sapi/v1/capital/deposit/hisrec?{qs}",
+                                headers={"X-MBX-APIKEY": self.cfg.binance_api_key}, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                data = await r.json(content_type=None)
+            return list(data) if isinstance(data, list) else []
         if exchange == "upbit":
             ak, sk, base, jwt = self.cfg.upbit_access_key, self.cfg.upbit_secret_key, "https://api.upbit.com", make_jwt
         elif exchange == "bithumb":
