@@ -38,6 +38,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/cycles.db")
     ap.add_argument("--config", default="config/default.yaml")
+    ap.add_argument("--ovs", default=None, help="레그 표를 이 해외 거래소로 필터 (예: okx)")
+    ap.add_argument("--top", type=int, default=12, help="레그 표 행 수")
+    ap.add_argument("--extremes", type=int, default=0, help="드리프트 최선/최악 N개 사이클 상세 (이상치 점검)")
     args = ap.parse_args()
 
     rows = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True).execute(
@@ -88,6 +91,20 @@ def main() -> None:
             mid = drifts[len(drifts) // 2]
             print(f"드리프트(실현−기대, %p): 중앙값 {mid:+.3f} · 최악 {drifts[0]:+.3f} · 최선 {drifts[-1]:+.3f}"
                   f"  ← naked 리스크·슬리피지 갭의 실측")
+        if args.extremes:
+            # 이상치 점검: 실현이 기대와 크게 어긋난 사이클 — 얇은 호가·튄 도착가·전송 불가 의심 신호
+            scored = [
+                ((c["pnl_usd"] / num(c["notional_usd"]) - c["entry_edge"]) * 100, c)
+                for c in settled
+                if num(c["notional_usd"]) > 0 and c.get("entry_edge") is not None and c.get("pnl_usd") is not None
+            ]
+            scored.sort(key=lambda t: t[0])
+            print(f"\n드리프트 극단 사이클 (최악 {args.extremes} / 최선 {args.extremes}) — 진입시각(UTC) 코인 방향 레그 명목 기대→실현:")
+            for d, c in scored[:args.extremes] + scored[-args.extremes:]:
+                ent = c["stamps"].get("ENTERED") or 0
+                print(f"  {ts_str(ent)}  {c['coin']:8} {c['kind'].upper():3} {c['dom_ex']}↔{c.get('ovs_ex') or 'binance':8}"
+                      f" ${num(c['notional_usd']):,.0f}  {c['entry_edge']*100:+.2f}% → {c['pnl_usd']/num(c['notional_usd'])*100:+.2f}%"
+                      f"  (드리프트 {d:+.2f}pp)")
 
         by_day: dict[str, float] = defaultdict(float)
         for c in settled:
@@ -102,8 +119,9 @@ def main() -> None:
             k = (c["coin"], c["kind"], c["dom_ex"], c.get("ovs_ex") or "binance")
             agg[k][0] += 1
             agg[k][1] += c.get("pnl_usd") or 0
-        print("\n코인×방향×레그 상위 (손익순) — M3 라이브 거래소 선정 근거:")
-        for (coin, kind, dom, ovs), (n, p) in sorted(agg.items(), key=lambda kv: -kv[1][1])[:12]:
+        rows_agg = [kv for kv in agg.items() if not args.ovs or kv[0][3] == args.ovs]
+        print(f"\n코인×방향×레그 상위 (손익순{', ' + args.ovs + ' 레그만' if args.ovs else ''}) — M3 라이브 거래소 선정 근거:")
+        for (coin, kind, dom, ovs), (n, p) in sorted(rows_agg, key=lambda kv: -kv[1][1])[:args.top]:
             print(f"  {coin:8} {kind.upper():3} {dom:8}↔{ovs:8} {n:3}건  ${p:+,.2f}")
 
     if open_:
