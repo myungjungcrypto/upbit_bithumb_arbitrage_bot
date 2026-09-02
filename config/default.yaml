@@ -154,3 +154,5 @@ execution:
   withdraw_buffer_pct: 0.005 # 출금 수량 = 가용 × (1−버퍼) — 출금 수수료 여유
   deposit_timeout_mult: 4    # 입금 대기 = 예상 전송시간 × 배수 (초과 = RECONCILE)
   arm_ttl_sec: 900           # /arm 유효 시간 (만료 = 자동 DISARM)
+  binance_sub_account: false # true = 매수는 트레이딩 서브계좌(BINANCE_TRADE_* = 서브 키), 출금 전 서브→마스터 이체 후
+                             #        마스터 출금 키로 출금 (2단 출금). 서브계좌는 외부 출금이 구조적으로 불가

@@ -133,12 +133,31 @@ class LiveWithdrawBackend:
             raise OrderError(f"OKX 출금 거부: {data.get('msg')} (code={data.get('code')})")
         return str(rows[0].get("wdId"))
 
+    async def _binance_sub_to_master(self, sess, coin, amount) -> None:
+        """서브계좌 → 마스터 이체 (2단 출금의 1단). POST /sapi/v1/sub-account/transfer/subToMaster —
+        **서브계좌의 거래 키**로 호출 ('Enable Spot & Margin Trading'만 있으면 됨, 자금은 마스터로만 이동 가능).
+        서브계좌는 외부 출금이 구조적으로 불가(웹·API 모두)라 마스터 출금 키와 자연스럽게 권한이 분리된다."""
+        tk, ts_ = self.cfg.binance_trade_keys
+        if not (tk and ts_):
+            raise OrderError("바이낸스 서브계좌 거래 키 미설정 (BINANCE_TRADE_*) — 서브→마스터 이체 불가")
+        qs = sign_query(ts_, {"asset": coin, "amount": str(amount),
+                              "timestamp": int(__import__("time").time() * 1000), "recvWindow": 10000})
+        async with sess.post(f"{BINANCE_BASE}/sapi/v1/sub-account/transfer/subToMaster?{qs}",
+                             headers={"X-MBX-APIKEY": tk}, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            data = await r.json(content_type=None)
+            if r.status >= 400 or not isinstance(data, dict) or "txnId" not in data:
+                raise OrderError(f"바이낸스 서브→마스터 이체 거부: {data}")
+        log.info("[binance] sub→master 이체 %s %s (txnId=%s)", amount, coin, data.get("txnId"))
+
     async def _binance(self, sess, coin, amount, address, network, memo) -> str:
         """POST /sapi/v1/capital/withdraw/apply — 마스터 계정 출금 전용 키. 주소 화이트리스트 ON이면 미등록 주소는
-        거래소가 거부한다(방어선 1). network는 바낸 코드("ETH"/"BSC"…). 서브계좌 2단 출금(이체→출금)은 M4."""
+        거래소가 거부한다(방어선 1). network는 바낸 코드("ETH"/"BSC"…).
+        execution.binance_sub_account=true면 매수가 서브계좌에서 일어났으므로 먼저 서브→마스터 이체(2단 출금)."""
         ak, sk = self.cfg.binance_withdraw_keys
         if not (ak and sk):
             raise OrderError("바이낸스 출금 키 미설정 (BINANCE_WITHDRAW_*)")
+        if bool((self.cfg.raw.get("execution", {}) or {}).get("binance_sub_account", False)):
+            await self._binance_sub_to_master(sess, coin, amount)
         params = {"coin": coin, "network": network, "address": address, "amount": str(amount),
                   "walletType": 0, "timestamp": int(__import__("time").time() * 1000), "recvWindow": 10000}
         if memo:

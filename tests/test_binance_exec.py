@@ -55,3 +55,24 @@ def test_binance_adapter_locked(monkeypatch):
     monkeypatch.delenv("LIVE_TRADING_ALLOWED", raising=False)
     with pytest.raises(LiveLockError):
         asyncio.run(BinanceOrderAdapter("k", "s", allow_live=True).place_ioc(None, "buy", "PROM", "USDT", D(10), D(1), "kimpx"))
+
+
+def test_binance_two_step_withdraw_calls_sub_to_master_first(monkeypatch):
+    """서브계좌 모드: 출금 전 서브→마스터 이체가 먼저 호출된다 (서브계좌는 외부 출금 불가)."""
+    from kimp.config import Config
+    from kimp.exec.withdraw import LiveWithdrawBackend
+    monkeypatch.setenv("LIVE_TRADING_ALLOWED", "1")
+    monkeypatch.setenv("BINANCE_WITHDRAW_API_KEY", "wk"); monkeypatch.setenv("BINANCE_WITHDRAW_API_SECRET", "ws")
+    be = LiveWithdrawBackend(Config(raw={"execution": {"binance_sub_account": True}}), allow_live=True)
+    calls = []
+    async def fake_sub_to_master(sess, coin, amount):
+        calls.append(("sub2master", coin, amount))
+    be._binance_sub_to_master = fake_sub_to_master
+    # 이체 후 실제 출금 HTTP는 네트워크라 여기서 끊는다 — 순서만 검증
+    class Boom(Exception): ...
+    async def fake_post(*a, **k): raise Boom()
+    class FakeSess:
+        post = staticmethod(fake_post)
+    with pytest.raises(Boom):
+        asyncio.run(be._binance(FakeSess(), "PROM", D("9.9"), "addr", "ETH", ""))
+    assert calls == [("sub2master", "PROM", D("9.9"))]
