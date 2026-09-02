@@ -25,6 +25,15 @@ from .cycle.risk import RiskManager
 from .cycle.store import CycleStore
 from .engine.books import BookStore
 from .engine.runner import PremiumEngine
+from .cycle.gateway import PaperWithdrawBackend, WithdrawalGateway
+from .exec.base import live_allowed
+from .exec.bithumb import BithumbOrderAdapter
+from .exec.deposits import DepositWatcher
+from .exec.journal import ExecutionJournal
+from .exec.okx import OkxOrderAdapter
+from .exec.runner import LiveCycleRunner, SimDepositWatcher, SimOrderAdapter
+from .exec.upbit import UpbitOrderAdapter
+from .exec.withdraw import LiveWithdrawBackend
 from .paper.engine import PaperEngine
 from .paper.inventory import InventoryEngine
 from .symbols import leg_blocked
@@ -70,7 +79,7 @@ async def run(cfg: Config) -> None:
     flush_sec = float(st.get("flush_sec", 30))
     writers = {
         name: BufferedParquetWriter(root, name, flush_rows, flush_sec)
-        for name in ("books", "trades", "fx", "premium", "health", "wallet", "paper_cycles")
+        for name in ("books", "trades", "fx", "premium", "health", "wallet", "paper_cycles", "live_cycles")
     }
 
     alerter = Alerter(
@@ -196,6 +205,33 @@ async def run(cfg: Config) -> None:
     control.on_command("/stop", _stop)
     control.on_command("/resume", _resume)
     control.on_command("/report", _report_text)
+
+    # --- M3 실거래 러너: 게이트웨이(방어선 4·5) + 주문 어댑터 + 저널 + 입금 감시 결선 ---
+    exec_mode = str(cfg.raw.get("execution", {}).get("mode", "off"))
+    live = exec_mode == "live"
+    gateway = WithdrawalGateway(
+        cfg.raw.get("withdrawals", {}), control if control.live else None, alerter,
+        LiveWithdrawBackend(cfg, allow_live=True) if live else PaperWithdrawBackend(),
+    )
+    if live:
+        ok_k, ok_s, ok_p = cfg.okx_trade_keys
+        up_k, up_s = cfg.upbit_trade_keys
+        bt_k, bt_s = cfg.bithumb_trade_keys
+        adapters = {"okx": OkxOrderAdapter(ok_k, ok_s, ok_p, allow_live=True),
+                    "upbit": UpbitOrderAdapter(up_k, up_s, allow_live=True),
+                    "bithumb": BithumbOrderAdapter(bt_k, bt_s, allow_live=True)}
+        watcher = DepositWatcher(cfg)
+    else:
+        adapters = {ex: SimOrderAdapter(ex) for ex in ("okx", "upbit", "bithumb", "binance", "bybit")}
+        watcher = SimDepositWatcher(delay_sec=5.0)
+    journal = ExecutionJournal(Path(root) / "exec.db")
+    runner = LiveCycleRunner(cfg, bus, store, journal, risk, alerter, control, gateway, watcher, adapters,
+                             wallet_state, paper.blocklist, paper.verified_ok, writers["live_cycles"])
+    control.on_command("/arm", runner.arm, with_args=True)
+    control.on_command("/disarm", runner.disarm)
+    control.on_command("/exec", runner.status)
+    log.info("exec runner: mode=%s (환경잠금 %s, 라우트 %d개)", exec_mode,
+             "OPEN" if live_allowed() else "LOCKED", len(runner.routes))
     if control.live:
         log.info("telegram control tower: ON (/status /stop /resume + 승인 버튼)")
 
@@ -461,6 +497,7 @@ async def run(cfg: Config) -> None:
         asyncio.create_task(retention_janitor(), name="retention"),
         asyncio.create_task(paper.run(stop), name="paper"),
         asyncio.create_task(inv.run(stop), name="paper.inventory"),
+        asyncio.create_task(runner.run(stop), name="exec.runner"),
         asyncio.create_task(flusher(list(writers.values()), stop), name="flusher"),
         asyncio.create_task(alerter.sender(stop), name="telegram.sender"),
         asyncio.create_task(alerter.digest_loop(stop), name="telegram.digest"),

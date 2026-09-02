@@ -85,9 +85,11 @@ class DepositWatcher:
             data = await r.json(content_type=None)
         return list(data) if isinstance(data, list) else []
 
-    async def wait_for(self, exchange: str, coin: str, min_amount: Decimal, timeout_sec: float,
-                       stop: asyncio.Event | None = None) -> dict | None:
-        """새 입금 도착까지 폴링. 반환 None = 타임아웃/중단 (STUCK_DEPOSIT 판단은 호출자)."""
+    async def wait_for(self, exchange: str, coin: str, expected: Decimal, timeout_sec: float,
+                       stop: asyncio.Event | None = None, min_ratio: Decimal = Decimal("0.9")) -> dict | None:
+        """새 입금 도착까지 폴링 — 기대 수량의 min_ratio 이상이면 도착. 반환 None = 타임아웃/중단
+        (STUCK_DEPOSIT 판단은 호출자). 실제 크레딧 수량은 반환 dict의 amount."""
+        min_amount = expected * min_ratio
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_sec
         async with aiohttp.ClientSession(trust_env=True, headers={"Accept": "application/json"}) as sess:

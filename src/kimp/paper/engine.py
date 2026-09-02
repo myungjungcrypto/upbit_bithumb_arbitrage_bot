@@ -32,6 +32,36 @@ from ..symbols import leg_blocked, leg_key
 log = logging.getLogger("paper")
 
 
+def wallet_block_reason(wallet_state: dict, kind: str, coin: str, dom_ex: str, ovs_ex: str) -> str | None:
+    """T4 지갑 게이트 — None=통과, str=차단 사유. 국내 미확인=차단(보수), 해외 미확인=통과(수집 랙 허용).
+    페이퍼·라이브 러너 공용 (판정 드리프트 방지)."""
+    dom = wallet_state.get((dom_ex, coin))
+    if dom is None:
+        return f"{dom_ex} 지갑 상태 미확인"
+    dep, wd = dom
+    if kind == "in" and not dep:
+        return f"{dom_ex} 입금 정지"
+    if kind == "out" and not wd:
+        return f"{dom_ex} 출금 정지"
+    ovs = wallet_state.get((ovs_ex, coin))
+    if ovs is not None:
+        ovs_dep, ovs_wd = ovs
+        if kind == "in" and not ovs_wd:
+            return f"{ovs_ex} 출금 정지"
+        if kind == "out" and not ovs_dep:
+            return f"{ovs_ex} 입금 정지"
+    return None
+
+
+def leg_allowed(blocklist: set[str], verified_ok: dict[str, set[str]] | None, coin: str, dom_ex: str, ovs_ex: str) -> bool:
+    """V7 게이트 — blocklist 레그 문법 + allowlist(검증 레그) 모드. 페이퍼·라이브 공용."""
+    if leg_blocked(blocklist, coin, dom_ex, ovs_ex):
+        return False
+    if verified_ok is not None and leg_key(dom_ex, ovs_ex) not in verified_ok.get(coin.upper(), ()):
+        return False
+    return True
+
+
 class PaperEngine:
     def __init__(
         self,
@@ -100,23 +130,7 @@ class PaperEngine:
     # ---------- 게이트 ----------
 
     def _wallet_ok(self, kind: str, coin: str, dom_ex: str, ovs_ex: str) -> str | None:
-        """None=통과, str=차단 사유. 국내 미확인=차단(보수), 해외 미확인=통과(수집 랙 허용)."""
-        dom = self.wallet_state.get((dom_ex, coin))
-        if dom is None:
-            return f"{dom_ex} 지갑 상태 미확인"
-        dep, wd = dom
-        if kind == "in" and not dep:
-            return f"{dom_ex} 입금 정지"
-        if kind == "out" and not wd:
-            return f"{dom_ex} 출금 정지"
-        ovs = self.wallet_state.get((ovs_ex, coin))
-        if ovs is not None:
-            ovs_dep, ovs_wd = ovs
-            if kind == "in" and not ovs_wd:
-                return f"{ovs_ex} 출금 정지"
-            if kind == "out" and not ovs_dep:
-                return f"{ovs_ex} 입금 정지"
-        return None
+        return wallet_block_reason(self.wallet_state, kind, coin, dom_ex, ovs_ex)
 
     def _transfer_sec(self, coin: str) -> float:
         return float(self.transfer_min.get(coin, self.transfer_min.get("default", 15))) * 60
@@ -135,10 +149,8 @@ class PaperEngine:
         if not self.enabled:
             return
         coin, dom_ex, ovs_ex = row["coin"], row["dom_ex"], row["ovs_ex"]
-        if leg_blocked(self.blocklist, coin, dom_ex, ovs_ex):
-            return  # V7 미검증/레그 차단 — 엣지가 아무리 좋아도 거래 금지
-        if self.verified_ok is not None and leg_key(dom_ex, ovs_ex) not in self.verified_ok.get(coin.upper(), ()):
-            return  # allowlist 모드: 검증 통과 레그만 (신규 상장·미검증 해외 레그 = 자동 차단)
+        if not leg_allowed(self.blocklist, self.verified_ok, coin, dom_ex, ovs_ex):
+            return  # V7: blocklist 레그 차단 / allowlist 모드 미검증 레그 — 엣지가 아무리 좋아도 거래 금지
         for kind in ("in", "out"):
             net = row.get(f"{kind}_net")
             if net is None or net < self.entry_thr:

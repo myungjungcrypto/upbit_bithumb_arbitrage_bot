@@ -38,7 +38,7 @@ _ALLOWED: dict[str, set[str]] = {
     "WITHDRAW_REQUESTED": {"WITHDRAW_SENT", "ABORTED"},
     "WITHDRAW_SENT": {"DEPOSIT_CREDITED"},
     "DEPOSIT_CREDITED": {"SELL_SUBMITTED"},
-    "SELL_SUBMITTED": {"SELL_DONE"},
+    "SELL_SUBMITTED": {"SELL_DONE", "SELL_SUBMITTED"},  # 재시도 = 새 attempt로 재제출 (IOC 전량 미체결 시)
     "SELL_DONE": {"SETTLED"},
 }
 

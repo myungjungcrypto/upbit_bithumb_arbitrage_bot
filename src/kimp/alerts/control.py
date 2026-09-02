@@ -26,6 +26,7 @@ class TelegramControl:
         self.token = token
         self.chat_id = str(chat_id)
         self.commands: dict[str, callable] = {}      # "/status" -> () -> str
+        self._with_args: set[str] = set()
         self._pending: dict[str, asyncio.Future] = {}  # 승인 대기 (req_id -> Future[bool])
         self._offset = 0
 
@@ -33,8 +34,11 @@ class TelegramControl:
     def live(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    def on_command(self, cmd: str, fn) -> None:
+    def on_command(self, cmd: str, fn, with_args: bool = False) -> None:
+        """with_args=True면 fn(args_text) — 예: "/arm PROM 15" → fn("PROM 15")."""
         self.commands[cmd] = fn
+        if with_args:
+            self._with_args.add(cmd)
 
     # ---------- 승인 요청 (게이트웨이가 호출) ----------
 
@@ -72,10 +76,14 @@ class TelegramControl:
         if msg:
             if str(msg.get("chat", {}).get("id")) != self.chat_id:
                 return None  # 화이트리스트 외 — 무시
-            text = (msg.get("text") or "").strip().split()[0] if msg.get("text") else ""
+            full = (msg.get("text") or "").strip()
+            parts = full.split(maxsplit=1)
+            text = parts[0] if parts else ""
             fn = self.commands.get(text)
             if fn:
                 try:
+                    if text in self._with_args:
+                        return (self.chat_id, str(fn(parts[1] if len(parts) > 1 else "")))
                     return (self.chat_id, str(fn()))
                 except Exception as e:
                     return (self.chat_id, f"명령 실패: {e!r}")

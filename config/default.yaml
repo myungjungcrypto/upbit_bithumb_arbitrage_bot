@@ -139,3 +139,17 @@ withdrawals:
                              #   extra   = 거래소별 추가 파라미터 (빗썸 트래블룰 필드 등 — V1 실측 후 기입)
                              # 예: {coin: PROM, from: okx, to: upbit, address: "0x..", network: "PROM-ERC20"}
                              # 거래소단 화이트리스트(방어선 1)와 1:1 이중 잠금
+
+# 실거래 러너 (M3ⓔⓕ — §4.1 방어선 6 잠금 스택). mode: off | dry_run(시뮬 어댑터 리허설) | live
+execution:
+  mode: off                  # live는 .env LIVE_TRADING_ALLOWED=1 + /arm <코인> 까지 전부 있어야 발사
+  routes: []                 # 라우트 allowlist — 예: [{coin: PROM, dom: upbit, ovs: okx, direction: in}]
+  max_notional_usd: 100      # 사이클당 명목 상한 (최소 금액 실거래 — T13 cycle_cap와 min)
+  max_cycles: 1              # 프로세스 생애 총 실행 상한 (첫 라이브 = 1사이클 후 자동 정지)
+  entry_threshold: 0.005
+  ioc_margin_pct: 0.002      # IOC 시장성 지정가 여유 = 슬리피지 상한 (T7)
+  min_fill_pct: 0.10         # 매수 체결 10% 미만 → 반대매매 후 ABORT (T6 확정)
+  order_timeout_sec: 10      # 초과 시 재주문 없이 client ID 재조회
+  withdraw_buffer_pct: 0.005 # 출금 수량 = 가용 × (1−버퍼) — 출금 수수료 여유
+  deposit_timeout_mult: 4    # 입금 대기 = 예상 전송시간 × 배수 (초과 = RECONCILE)
+  arm_ttl_sec: 900           # /arm 유효 시간 (만료 = 자동 DISARM)
