@@ -81,7 +81,8 @@ class LiveCycleRunner:
         self.gateway, self.watcher, self.adapters = gateway, watcher, adapters
         self.wallet_state, self.blocklist, self.verified_ok, self.ledger = wallet_state, blocklist, verified_ok, ledger
         e = cfg.raw.get("execution", {}) or {}
-        self.mode = str(e.get("mode", "off"))                      # off | dry_run | live
+        m = e.get("mode", "off")                                   # off | dry_run | live
+        self.mode = "off" if m in (False, None, "False", "false") else str(m)  # YAML의 off → False 정규화
         self.routes = {(str(r["coin"]).upper(), str(r["dom"]), str(r["ovs"]), str(r.get("direction", "in")))
                        for r in e.get("routes", [])}
         self.max_notional = D(e.get("max_notional_usd", 100))

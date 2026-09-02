@@ -142,7 +142,8 @@ withdrawals:
 
 # 실거래 러너 (M3ⓔⓕ — §4.1 방어선 6 잠금 스택). mode: off | dry_run(시뮬 어댑터 리허설) | live
 execution:
-  mode: off                  # live는 .env LIVE_TRADING_ALLOWED=1 + /arm <코인> 까지 전부 있어야 발사
+  mode: "off"                # "off" | "dry_run" | "live" (따옴표 필수 — YAML은 off를 불리언으로 읽음)
+                             # live는 .env LIVE_TRADING_ALLOWED=1 + /arm <코인> 까지 전부 있어야 발사
   routes: []                 # 라우트 allowlist — 예: [{coin: PROM, dom: upbit, ovs: okx, direction: in}]
   max_notional_usd: 100      # 사이클당 명목 상한 (최소 금액 실거래 — T13 cycle_cap와 min)
   max_cycles: 1              # 프로세스 생애 총 실행 상한 (첫 라이브 = 1사이클 후 자동 정지)

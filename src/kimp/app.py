@@ -207,7 +207,8 @@ async def run(cfg: Config) -> None:
     control.on_command("/report", _report_text)
 
     # --- M3 실거래 러너: 게이트웨이(방어선 4·5) + 주문 어댑터 + 저널 + 입금 감시 결선 ---
-    exec_mode = str(cfg.raw.get("execution", {}).get("mode", "off"))
+    _m = cfg.raw.get("execution", {}).get("mode", "off")
+    exec_mode = "off" if _m in (False, None, "False", "false") else str(_m)
     live = exec_mode == "live"
     gateway = WithdrawalGateway(
         cfg.raw.get("withdrawals", {}), control if control.live else None, alerter,
