@@ -95,6 +95,9 @@ def test_dom_leg_full_fail_compresses_to_dom_entry():
 
 
 def test_norm_net_aliases():
+    assert vu.norm_net("BASE_ETH") == "BASE" and vu.norm_net("ARB_ETH") == "ARBITRUM"  # 빗썸 L2 표기 (실측 2026-09-02)
+    assert vu.norm_net("ZK_ETH") == "ZKSYNC" and vu.norm_net("Sonic") == "S" and vu.norm_net("KUSAMA") == "KSM"
+    assert vu.norm_net("MTL_ETH") == "MTL_ETH"                     # 실제 다른 네트워크 — 의도적 미통합
     assert vu.norm_net("ERC20") == "ETH"
     assert vu.norm_net("Arbi") == "ARBITRUM"     # 바이비트 표기
     assert vu.norm_net("Avalanche C-Chain") == "AVAX"

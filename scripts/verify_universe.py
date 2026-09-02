@@ -57,6 +57,12 @@ NET_ALIAS = {
     "XPL": "PLASMA",
     "OPTIMISM": "OP",
     "ARBI": "ARBITRUM",          # 바이비트 표기
+    # 빗썸 v1 net_type의 L2 표기 "<체인>_ETH" (2026-09-02 실측: BASE_ETH=Base, ARB_ETH=Arbitrum One …)
+    # — 같은 체인의 표기차. 단 MTL_ETH(ERC20 MTL)≠MTL(Metal L2)은 실제 다른 네트워크라 의도적 미통합
+    "BASE_ETH": "BASE", "ARB_ETH": "ARBITRUM", "OP_ETH": "OP", "ZK_ETH": "ZKSYNC",
+    "MANTA_ETH": "MANTA", "MEGA_ETH": "MEGAETH",
+    # 코인 고유 체인: 빗썸은 티커, 바낸은 정식명 — 동일 체인
+    "SONIC": "S", "KATANA": "KAT", "KUSAMA": "KSM", "FRAXTAL": "FRAX", "ALLORA": "ALLO",
     # OKX chain 접미사는 네이티브 체인을 고유명으로 씀 ("BTC-Bitcoin" → BITCOIN) — 티커로 정규화
     # (2026-08-30 리뷰: 별칭 없으면 업비트/바낸의 "BTC" 표기와 영영 안 겹쳐 정상 레그가 오차단됨)
     "BITCOIN": "BTC", "RIPPLE": "XRP", "LITECOIN": "LTC", "DOGECOIN": "DOGE",
