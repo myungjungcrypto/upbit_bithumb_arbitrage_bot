@@ -112,8 +112,13 @@ class PremiumEngine:
             g = outbound_gross_edge(dom, ovs, usdt, n_usd * usdt_mid)
             return None if g is None else g - fee_total - out_wd_pct - wd_cost_usd / n_usd
 
-        in_cap = capacity_at_threshold(in_net, thr)
-        out_cap = capacity_at_threshold(out_net, thr)
+        # capacity 이분탐색(레그당 VWAP 수십 회)은 기회가 있을 때만 — 전 틱·전 레그 무조건 계산이
+        # M1(해외 3곳) 이후 CPU를 3배로 키워 t3.large 공유 박스를 잠식함 (2026-09-17 EC2 정지 의심 원인)
+        n0 = self.cfg.ladder_usd[0] if self.cfg.ladder_usd else Decimal(5000)
+        in_first = in_net(n0)
+        out_first = out_net(n0)
+        in_cap = capacity_at_threshold(in_net, thr) if in_first is not None and in_first >= thr else None
+        out_cap = capacity_at_threshold(out_net, thr) if out_first is not None and out_first >= thr else None
 
         rows = []
         for notional_usd in self.cfg.ladder_usd:

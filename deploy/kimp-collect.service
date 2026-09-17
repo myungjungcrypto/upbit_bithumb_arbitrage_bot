@@ -26,6 +26,10 @@ ExecStart=/opt/kimp/venv/bin/kimp-collect --config /opt/kimp/app/config/default.
 Restart=always
 RestartSec=5
 Nice=5
+# 공유 박스 보호 (2026-09-17): 봇이 EC2 전체를 잠식하지 못하게 상한 — 초과 시 봇만 죽고(자동 재시작) 박스는 산다
+MemoryMax=2G
+MemorySwapMax=0
+CPUQuota=120%
 # 데이터는 WorkingDirectory 기준 data/ 에 쌓임 (config storage.root로 변경 가능)
 
 [Install]
